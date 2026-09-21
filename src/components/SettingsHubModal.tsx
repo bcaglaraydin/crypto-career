@@ -417,34 +417,55 @@ export default function SettingsHubModal({ isOpen, onClose, onDataChanged }: Set
 
       await restoreClientBackup(parsed);
 
-      if (parsed.cachedPortfolio) {
+      if (parsed.cachedPortfolio && parsed.cachedPortfolio.totalPortfolioValueUSD > 10) {
         await setCachedPortfolio(parsed.cachedPortfolio);
       }
 
-      // Trigger recalculation with normalized dataset
-      const spotBalances = parsed.dataset.spotBalances || parsed.dataset.balances || [];
-      const futuresPositions = parsed.dataset.futuresPositions || parsed.dataset.futures || [];
-      const calcRes = await fetch('/api/calculate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          dataset: {
-            ...parsed.dataset,
-            spotBalances,
-            balances: spotBalances,
-            futuresPositions,
-            futures: futuresPositions,
-          },
-        }),
-      });
-      const calcData = await calcRes.json();
-      if (calcData.success && calcData.portfolio) {
-        await setCachedPortfolio(calcData.portfolio);
+      // Extract existing ticker prices from dataset or cachedPortfolio
+      const tickerPrices: Record<string, number> = { ...(parsed.dataset.tickerPrices || {}) };
+      if (parsed.cachedPortfolio?.coinSummaries) {
+        for (const c of parsed.cachedPortfolio.coinSummaries) {
+          if (c.currentPriceUSD > 0 && !tickerPrices[`${c.asset}USDT`]) {
+            tickerPrices[`${c.asset}USDT`] = c.currentPriceUSD;
+          }
+        }
+      }
+      if (parsed.cachedPortfolio?.currentUsdtTryRate && !tickerPrices['USDTTRY']) {
+        tickerPrices['USDTTRY'] = parsed.cachedPortfolio.currentUsdtTryRate;
+      }
+
+      // Trigger recalculation with normalized dataset and tickerPrices
+      try {
+        const spotBalances = parsed.dataset.spotBalances || parsed.dataset.balances || [];
+        const futuresPositions = parsed.dataset.futuresPositions || parsed.dataset.futures || [];
+        const walletBalances = parsed.dataset.walletBalances || parsed.dataset.wallets || [];
+        const calcRes = await fetch('/api/calculate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            dataset: {
+              ...parsed.dataset,
+              spotBalances,
+              balances: spotBalances,
+              futuresPositions,
+              futures: futuresPositions,
+              walletBalances,
+              wallets: walletBalances,
+              tickerPrices,
+            },
+          }),
+        });
+        const calcData = await calcRes.json();
+        if (calcData.success && calcData.portfolio && calcData.portfolio.totalPortfolioValueUSD > 10) {
+          await setCachedPortfolio(calcData.portfolio);
+        }
+      } catch (calcErr) {
+        console.warn('Stateless recalculation error, retaining cachedPortfolio:', calcErr);
       }
 
       const tradesCount = parsed.dataset.trades?.length || 0;
       const transfersCount = parsed.dataset.transfers?.length || 0;
-      const spotCount = spotBalances.length;
+      const spotCount = (parsed.dataset.spotBalances || parsed.dataset.balances || []).length;
       setDbSuccessMsg(`Restore successful! Loaded ${tradesCount} trades, ${transfersCount} cash transfers, and ${spotCount} wallet balances.`);
       fetchSettings();
       if (onDataChanged) onDataChanged();

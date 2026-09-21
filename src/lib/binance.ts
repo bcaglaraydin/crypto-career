@@ -153,9 +153,37 @@ export async function getWalletBalances(creds?: BinanceCredentials) {
   }
 }
 
-// 3. All Current Prices
-export async function getAllPrices() {
-  return binanceRequest<Array<{ symbol: string; price: string }>>('/api/v3/ticker/price', {}, false);
+// 3. All Current Prices (with cloud/serverless unblocked fallback)
+export async function getAllPrices(): Promise<Array<{ symbol: string; price: string }>> {
+  try {
+    const res = await binanceRequest<Array<{ symbol: string; price: string }>>('/api/v3/ticker/price', {}, false);
+    if (Array.isArray(res) && res.length > 0) return res;
+  } catch (e) {
+    console.warn('api.binance.com ticker price failed, falling back to data-api.binance.vision:', e);
+  }
+
+  // Fallback: data-api.binance.vision is Binance's official public data endpoint that is unrestricted in US/Vercel
+  try {
+    const visionRes = await fetch('https://data-api.binance.vision/api/v3/ticker/price', {
+      headers: { 'Accept': 'application/json' },
+      next: { revalidate: 60 },
+    });
+    const data = await visionRes.json();
+    if (Array.isArray(data) && data.length > 0) {
+      return data;
+    }
+  } catch (visionErr) {
+    console.warn('data-api.binance.vision fallback failed:', visionErr);
+  }
+
+  // Fallback: api1.binance.com
+  try {
+    const res = await fetch('https://api1.binance.com/api/v3/ticker/price');
+    const data = await res.json();
+    if (Array.isArray(data) && data.length > 0) return data;
+  } catch {}
+
+  return [];
 }
 
 // 4. Crypto Deposits (with 90-day window loop, supports incremental startTime)

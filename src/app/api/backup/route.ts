@@ -38,6 +38,18 @@ export async function GET() {
       }
     }
 
+    const tickerPrices: Record<string, number> = {};
+    if (cachedPortfolio?.coinSummaries) {
+      for (const c of cachedPortfolio.coinSummaries) {
+        if (c.currentPriceUSD > 0) {
+          tickerPrices[`${c.asset}USDT`] = c.currentPriceUSD;
+        }
+      }
+      if (cachedPortfolio.currentUsdtTryRate) {
+        tickerPrices['USDTTRY'] = cachedPortfolio.currentUsdtTryRate;
+      }
+    }
+
     const backup = {
       app: 'CryptoTrack',
       version: 1,
@@ -52,6 +64,7 @@ export async function GET() {
         walletBalances: wallets,
         wallets,
         customCosts,
+        tickerPrices,
       },
       cachedPortfolio,
       settings,
