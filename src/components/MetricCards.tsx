@@ -53,6 +53,11 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
     ? (portfolio.totalPnL_USD / portfolio.totalDepositedUSD) * 100
     : 0;
 
+  // Real cash return: "How much did I actually put in vs. what do I have now?"
+  // This is the most honest measure of profit/loss — pure cash in vs. current market value.
+  const netCashReturn = portfolioValue - netDeposits;
+  const cashROI = netDeposits > 0 ? (netCashReturn / netDeposits) * 100 : 0;
+
   return (
     <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-4 2xl:gap-5">
       {/* 1. Total PnL */}
@@ -266,14 +271,14 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
         )}
       </div>
 
-      {/* 5. Net Deposits */}
+      {/* 5. Net Deposits & Cash Return */}
       <div
         onClick={() => toggleExpand('netDeposits')}
         className="col-span-2 sm:col-span-2 lg:col-span-1 bg-[#121722]/90 border border-[#1e2738] hover:border-slate-700/80 rounded-xl p-3 sm:p-4 2xl:p-5 flex flex-col justify-between shadow-lg backdrop-blur-sm transition-all cursor-pointer select-none"
       >
         <div className="flex items-center justify-between">
           <span className="text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Net Deposits (Principal)
+            Net Cash Invested
           </span>
           <div className="p-1 sm:p-1.5 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
             <ArrowDownRight className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
@@ -284,33 +289,56 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
           <div className="text-lg sm:text-2xl 2xl:text-3xl font-bold font-mono tracking-tight tabular-nums text-slate-100">
             {formatMoney(netDeposits)}
           </div>
-          <div className="text-[10px] sm:text-xs text-slate-400 font-mono">
-            Deposits: {formatMoney(isUSD ? portfolio.totalDepositedUSD : portfolio.totalDepositedTRY)}
+          <div className={`text-[10px] sm:text-xs font-mono font-semibold tabular-nums ${netCashReturn >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {formatMoney(netCashReturn, true)} now
           </div>
         </div>
 
-        <div className="flex items-center justify-between pt-1 border-t border-[#1e2738]/50 text-[10px] sm:text-xs text-slate-500 font-mono">
-          <span>Withdrawals: {formatMoney(isUSD ? portfolio.totalWithdrawnUSD : portfolio.totalWithdrawnTRY)}</span>
-          <span className="text-slate-500">{expandedCard === 'netDeposits' ? '▲' : '▼'}</span>
+        {/* Footer: Cash ROI badge — always visible, the key "am I up or down?" answer */}
+        <div className="flex items-center justify-between pt-1 border-t border-[#1e2738]/50 text-[10px] sm:text-xs">
+          <span className={`px-1.5 py-0.5 rounded font-mono font-semibold ${
+            cashROI >= 0
+              ? 'bg-emerald-500/15 text-emerald-400'
+              : 'bg-rose-500/15 text-rose-400'
+          }`}>
+            {cashROI >= 0 ? `+${cashROI.toFixed(1)}%` : `${cashROI.toFixed(1)}%`}
+          </span>
+          <span className="text-slate-500 text-[9px] sm:text-[10px]">cash ROI {expandedCard === 'netDeposits' ? '▲' : '▼'}</span>
         </div>
 
+        {/* Expand drawer: full breakdown */}
         {expandedCard === 'netDeposits' && (
           <div className="mt-2 pt-2 border-t border-dashed border-[#1e2738] text-[10px] sm:text-[11px] font-mono text-slate-400 space-y-1">
             <div className="flex justify-between">
-              <span>Total Inflow:</span>
-              <strong className="text-emerald-400">
-                +{formatMoney(isUSD ? portfolio.totalDepositedUSD : portfolio.totalDepositedTRY)}
+              <span>Deposited:</span>
+              <strong className="text-slate-200">
+                {formatMoney(isUSD ? portfolio.totalDepositedUSD : portfolio.totalDepositedTRY)}
               </strong>
             </div>
             <div className="flex justify-between">
-              <span>Total Outflow:</span>
-              <strong className="text-rose-400">
+              <span>Withdrawn:</span>
+              <strong className="text-slate-400">
                 -{formatMoney(isUSD ? portfolio.totalWithdrawnUSD : portfolio.totalWithdrawnTRY)}
+              </strong>
+            </div>
+            <div className="flex justify-between border-t border-[#1e2738]/60 pt-1 mt-1">
+              <span>Net Cash In:</span>
+              <strong className="text-amber-400">{formatMoney(netDeposits)}</strong>
+            </div>
+            <div className="flex justify-between">
+              <span>Portfolio Now:</span>
+              <strong className="text-slate-200">{formatMoney(portfolioValue)}</strong>
+            </div>
+            <div className={`flex justify-between border-t border-[#1e2738]/60 pt-1 mt-1 ${netCashReturn >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              <span className="font-semibold">Net Return:</span>
+              <strong>
+                {formatMoney(netCashReturn, true)} ({cashROI >= 0 ? '+' : ''}{cashROI.toFixed(1)}%)
               </strong>
             </div>
           </div>
         )}
       </div>
+
     </div>
   );
 };
