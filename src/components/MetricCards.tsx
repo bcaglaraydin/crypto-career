@@ -49,7 +49,13 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
   const netCashReturn = portfolioValue - netDeposits;
   const cashROI = netDeposits > 0 ? (netCashReturn / netDeposits) * 100 : 0;
 
+  // Open holdings cost basis: what was paid for the currently active coins
+  // Accounting identity: openCostBasis + unrealizedPnL = portfolioValue
+  const openCostBasis = portfolioValue - unrealizedPnL;
+  const openROI = openCostBasis > 0 ? (unrealizedPnL / openCostBasis) * 100 : 0;
+
   return (
+    <div className="space-y-3">
     <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-4 2xl:gap-5">
       {/* 1. Net Cash Return — the honest "am I winning or losing?" answer */}
       <div
@@ -122,6 +128,9 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
               <span>Trading PnL:</span>
               <span className={totalPnL >= 0 ? 'text-emerald-400/70' : 'text-rose-400/70'}>{formatMoney(totalPnL, true)}</span>
             </div>
+            <div className="mt-1 pt-1 border-t border-[#1e2738]/40 text-[9px] text-slate-400 bg-slate-900/60 p-1.5 rounded text-center font-mono">
+              {formatMoney(netDeposits)} (In) + ({formatMoney(netCashReturn, true)}) = {formatMoney(portfolioValue)}
+            </div>
           </div>
         )}
       </div>
@@ -144,14 +153,14 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
           <div className="text-lg sm:text-2xl 2xl:text-3xl font-bold font-mono tracking-tight tabular-nums text-slate-100">
             {formatMoney(portfolioValue)}
           </div>
-          <div className="text-[10px] sm:text-xs text-sky-400 font-mono mt-0.5 truncate">
-            Spot: {formatMoney(isUSD ? portfolio.spotValueUSD : portfolio.spotValueUSD * portfolio.currentUsdtTryRate)}
+          <div className="text-[10px] sm:text-xs text-slate-400 font-mono mt-0.5 truncate">
+            Open Cost: <span className="text-amber-400 font-semibold">{formatMoney(openCostBasis)}</span>
           </div>
         </div>
 
         <div className="flex items-center justify-between pt-1 border-t border-[#1e2738]/50 text-[10px] sm:text-xs text-slate-400 font-mono">
-          <span>1 USDT = {portfolio.currentUsdtTryRate.toFixed(2)} ₺</span>
-          <span className="text-slate-500 hidden sm:inline">Live Rate</span>
+          <span>Spot: {formatMoney(isUSD ? portfolio.spotValueUSD : portfolio.spotValueUSD * portfolio.currentUsdtTryRate)}</span>
+          <span className="text-slate-500">{expandedCard === 'portfolioValue' ? '▲' : '▼'} details</span>
         </div>
 
         {expandedCard === 'portfolioValue' && (
@@ -167,6 +176,19 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
               <strong className="text-slate-200">
                 {formatMoney(isUSD ? portfolio.futuresValueUSD : portfolio.futuresValueUSD * portfolio.currentUsdtTryRate)}
               </strong>
+            </div>
+            <div className="flex justify-between border-t border-[#1e2738]/60 pt-1 mt-1">
+              <span>Open Cost Basis:</span>
+              <strong className="text-amber-400">{formatMoney(openCostBasis)}</strong>
+            </div>
+            <div className="flex justify-between">
+              <span>Unrealized PnL:</span>
+              <strong className={unrealizedPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                {formatMoney(unrealizedPnL, true)}
+              </strong>
+            </div>
+            <div className="mt-1 pt-1 border-t border-[#1e2738]/40 text-[9px] text-slate-400 bg-slate-900/60 p-1.5 rounded text-center font-mono">
+              {formatMoney(openCostBasis)} (Cost) + ({formatMoney(unrealizedPnL, true)}) = {formatMoney(portfolioValue)}
             </div>
           </div>
         )}
@@ -195,28 +217,43 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
             {formatMoney(unrealizedPnL, true)}
           </div>
           <div className="text-[10px] sm:text-xs text-slate-400 font-mono mt-0.5 truncate">
-            Futures: <strong className={portfolio.futuresUnrealizedPnL_USD >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{formatMoney(isUSD ? portfolio.futuresUnrealizedPnL_USD : portfolio.futuresUnrealizedPnL_TRY, true)}</strong>
+            Cost: <span className="text-amber-400">{formatMoney(openCostBasis)}</span> → <span className="text-slate-200">{formatMoney(portfolioValue)}</span>
           </div>
         </div>
 
         <div className="flex items-center justify-between pt-1 border-t border-[#1e2738]/50 text-[10px] sm:text-xs text-slate-400">
-          <span>Active Positions</span>
-          <span className="text-slate-500">{expandedCard === 'unrealizedPnL' ? '▲' : '▼'}</span>
+          <span className={`px-1.5 py-0.5 rounded font-mono font-semibold ${
+            unrealizedPnL >= 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
+          }`}>
+            {openCostBasis > 0 ? `${unrealizedPnL >= 0 ? '+' : ''}${openROI.toFixed(1)}%` : '0%'}
+          </span>
+          <span className="text-slate-500 text-[9px] sm:text-[10px]">open ROI {expandedCard === 'unrealizedPnL' ? '▲' : '▼'}</span>
         </div>
 
         {expandedCard === 'unrealizedPnL' && (
           <div className="mt-2 pt-2 border-t border-dashed border-[#1e2738] text-[10px] sm:text-[11px] font-mono text-slate-400 space-y-1">
             <div className="flex justify-between">
-              <span>Spot Unrealized:</span>
-              <strong className={portfolio.spotUnrealizedPnL_USD >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                {formatMoney(isUSD ? portfolio.spotUnrealizedPnL_USD : portfolio.spotUnrealizedPnL_TRY, true)}
-              </strong>
+              <span>Open Cost Basis:</span>
+              <strong className="text-amber-400">{formatMoney(openCostBasis)}</strong>
+            </div>
+            <div className="flex justify-between text-[9px] text-slate-500 pl-2">
+              <span>↳ Spot Cost:</span>
+              <span>{formatMoney(isUSD ? (portfolio.spotValueUSD - portfolio.spotUnrealizedPnL_USD) : (portfolio.spotValueUSD - portfolio.spotUnrealizedPnL_USD) * portfolio.currentUsdtTryRate)}</span>
+            </div>
+            <div className="flex justify-between text-[9px] text-slate-500 pl-2">
+              <span>↳ Futures Margin:</span>
+              <span>{formatMoney(isUSD ? (portfolio.futuresValueUSD - portfolio.futuresUnrealizedPnL_USD) : (portfolio.futuresValueUSD - portfolio.futuresUnrealizedPnL_USD) * portfolio.currentUsdtTryRate)}</span>
             </div>
             <div className="flex justify-between">
-              <span>Futures Unrealized:</span>
-              <strong className={portfolio.futuresUnrealizedPnL_USD >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                {formatMoney(isUSD ? portfolio.futuresUnrealizedPnL_USD : portfolio.futuresUnrealizedPnL_TRY, true)}
-              </strong>
+              <span>Current Market Value:</span>
+              <strong className="text-slate-200">{formatMoney(portfolioValue)}</strong>
+            </div>
+            <div className={`flex justify-between border-t border-[#1e2738]/60 pt-1 mt-1 font-semibold ${unrealizedPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              <span>Unrealized PnL:</span>
+              <strong>{formatMoney(unrealizedPnL, true)} ({openCostBasis > 0 ? (openROI >= 0 ? '+' : '') + openROI.toFixed(1) : 0}%)</strong>
+            </div>
+            <div className="mt-1 pt-1 border-t border-[#1e2738]/40 text-[9px] text-slate-400 bg-slate-900/60 p-1.5 rounded text-center font-mono">
+              {formatMoney(openCostBasis)} (Cost) + ({formatMoney(unrealizedPnL, true)}) = {formatMoney(portfolioValue)}
             </div>
           </div>
         )}
@@ -337,6 +374,46 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
         )}
       </div>
 
+    </div>
+
+      {/* Accounting Verification Strip — Mathematical Proof & Transparency */}
+      <div className="bg-[#121722]/80 border border-[#1e2738] rounded-xl p-3 sm:px-4 sm:py-2.5 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-2.5 text-xs font-mono shadow-md backdrop-blur-sm">
+        {/* Equation 1: Cash Accounting */}
+        <div className="flex items-center flex-wrap gap-1.5 sm:gap-2">
+          <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+          <span className="text-slate-400 font-sans font-semibold text-[11px] sm:text-xs">Cash Proof:</span>
+          <span className="text-amber-400 font-bold tabular-nums">{formatMoney(netDeposits)}</span>
+          <span className="text-slate-500 text-[10px] sm:text-xs">(In)</span>
+          <span className="text-slate-500 font-sans">+</span>
+          <span className={`font-bold tabular-nums ${netCashReturn >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {formatMoney(netCashReturn, true)}
+          </span>
+          <span className="text-slate-500 text-[10px] sm:text-xs">(Return)</span>
+          <span className="text-slate-500 font-sans">=</span>
+          <span className="text-slate-100 font-bold tabular-nums bg-slate-800/60 px-1.5 py-0.5 rounded border border-[#1e2738]">
+            {formatMoney(portfolioValue)}
+          </span>
+        </div>
+
+        <div className="hidden md:block h-3.5 w-px bg-[#1e2738]" />
+
+        {/* Equation 2: Asset Inventory Accounting */}
+        <div className="flex items-center flex-wrap gap-1.5 sm:gap-2">
+          <div className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+          <span className="text-slate-400 font-sans font-semibold text-[11px] sm:text-xs">Asset Proof:</span>
+          <span className="text-amber-400 font-bold tabular-nums">{formatMoney(openCostBasis)}</span>
+          <span className="text-slate-500 text-[10px] sm:text-xs">(Cost)</span>
+          <span className="text-slate-500 font-sans">+</span>
+          <span className={`font-bold tabular-nums ${unrealizedPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {formatMoney(unrealizedPnL, true)}
+          </span>
+          <span className="text-slate-500 text-[10px] sm:text-xs">(Unrealized)</span>
+          <span className="text-slate-500 font-sans">=</span>
+          <span className="text-slate-100 font-bold tabular-nums bg-slate-800/60 px-1.5 py-0.5 rounded border border-[#1e2738]">
+            {formatMoney(portfolioValue)}
+          </span>
+        </div>
+      </div>
     </div>
   );
 };
