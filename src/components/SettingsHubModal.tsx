@@ -30,6 +30,7 @@ import {
   getStoredBalances,
   getStoredFutures,
   setCachedPortfolio,
+  clearClientStorage,
 } from '@/lib/client-storage';
 
 interface SettingsHubModalProps {
@@ -321,6 +322,7 @@ export default function SettingsHubModal({ isOpen, onClose, onDataChanged }: Set
     try {
       setClearingDb(true);
       setDbSuccessMsg(null);
+      await clearClientStorage();
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
