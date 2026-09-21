@@ -3,6 +3,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { PortfolioOverview } from '@/lib/pnl-calculator';
 import { SyncStatus } from '@/lib/sync-engine';
+import {
+  getCachedPortfolio,
+  setCachedPortfolio,
+  getClientStorageStats,
+  getStoredSetting,
+  getStoredTrades,
+  getStoredTransfers,
+  getStoredBalances,
+  getStoredFutures,
+} from '@/lib/client-storage';
+import { runClientSync } from '@/lib/client-sync';
 import { Header } from '@/components/Header';
 import { MetricCards } from '@/components/MetricCards';
 import { PnLCharts } from '@/components/PnLCharts';
@@ -11,6 +22,7 @@ import { TransfersTable } from '@/components/TransfersTable';
 import { FuturesPositionsTable } from '@/components/FuturesPositionsTable';
 import { SpotHoldingsTable } from '@/components/SpotHoldingsTable';
 import { CsvUploadModal } from '@/components/CsvUploadModal';
+import SettingsHubModal from '@/components/SettingsHubModal';
 import {
   LayoutDashboard,
   ArrowLeftRight,
@@ -30,6 +42,7 @@ export default function Home() {
   const [currency, setCurrency] = useState<'USD' | 'TRY'>('USD');
   const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'SPOT' | 'FUTURES' | 'TRANSFERS'>('OVERVIEW');
   const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
 
   // Section collapse states
   const [futuresCollapsed, setFuturesCollapsed] = useState(false);
@@ -63,18 +76,81 @@ export default function Home() {
 
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  // Fetch portfolio data
+  // Fetch portfolio data with automatic client-side IndexedDB hydration fallback
   const fetchPortfolio = useCallback(async () => {
     try {
       const res = await fetch('/api/portfolio');
       const data = await res.json();
-      if (data.success) {
+      
+      // If backend SQLite returned data (e.g. running locally on author PC)
+      if (data.success && data.portfolio && (data.portfolio.coinSummaries?.length > 0 || data.portfolio.recentTransfers?.length > 0)) {
         setHasCredentials(data.hasCredentials);
         setSyncStatus(data.syncStatus);
         setPortfolio(data.portfolio);
+        try {
+          await setCachedPortfolio(data.portfolio);
+        } catch {}
+        return;
+      }
+
+      // If backend was empty (e.g. fresh browser on Vercel deployment), check client IndexedDB
+      const cached = await getCachedPortfolio();
+      if (cached && (cached.coinSummaries?.length > 0 || cached.recentTransfers?.length > 0)) {
+        setPortfolio(cached);
+        const stats = await getClientStorageStats();
+        setHasCredentials(stats.hasApiKey || data.hasCredentials);
+        if (stats.lastSyncedAt) {
+          setSyncStatus((prev) => ({
+            ...prev,
+            lastSyncedAt: stats.lastSyncedAt || undefined,
+            tradesCount: stats.tradesCount,
+            transfersCount: stats.transfersCount,
+          }));
+        }
+        return;
+      }
+
+      // If no cached summary exists but user has stored trades/transfers, calculate via stateless API
+      const trades = await getStoredTrades();
+      if (trades.length > 0) {
+        const transfers = await getStoredTransfers();
+        const balances = await getStoredBalances();
+        const futures = await getStoredFutures();
+        const calcRes = await fetch('/api/calculate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataset: { trades, transfers, balances, futures } }),
+        });
+        const calcData = await calcRes.json();
+        if (calcData.success && calcData.portfolio) {
+          setPortfolio(calcData.portfolio);
+          await setCachedPortfolio(calcData.portfolio);
+          const stats = await getClientStorageStats();
+          setHasCredentials(stats.hasApiKey || data.hasCredentials);
+          return;
+        }
+      }
+
+      // Fallback: syncStatus and hasCredentials from API or client storage stats
+      const stats = await getClientStorageStats();
+      if (stats.hasApiKey || data.hasCredentials) {
+        setHasCredentials(true);
+      }
+      if (data.success && data.portfolio) {
+        setPortfolio(data.portfolio);
+        setSyncStatus(data.syncStatus);
       }
     } catch (err) {
       console.error('Portfolio fetch failed:', err);
+      // Offline / Error fallback: attempt client IndexedDB
+      try {
+        const cached = await getCachedPortfolio();
+        if (cached) {
+          setPortfolio(cached);
+          const stats = await getClientStorageStats();
+          setHasCredentials(stats.hasApiKey);
+        }
+      } catch {}
     } finally {
       setLoading(false);
     }
@@ -84,10 +160,10 @@ export default function Home() {
     fetchPortfolio();
   }, [fetchPortfolio]);
 
-  // Polling sync status if sync is active
+  // Polling sync status if backend server sync is active
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
-    if (syncStatus.inProgress) {
+    if (syncStatus.inProgress && syncStatus.stage !== 'PROXY_SYNC') {
       interval = setInterval(async () => {
         const res = await fetch('/api/sync');
         const data = await res.json();
@@ -109,9 +185,66 @@ export default function Home() {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [syncStatus.inProgress, fetchPortfolio]);
+  }, [syncStatus.inProgress, syncStatus.stage, fetchPortfolio]);
 
   const handleStartSync = async (fullSync: boolean = false) => {
+    // Check if client has saved their own API credentials in browser IndexedDB
+    const clientKey = await getStoredSetting('binance_api_key');
+
+    // If server does not have .env credentials OR the user configured local browser keys:
+    // Execute browser-based client sync!
+    if (!hasCredentials || clientKey) {
+      try {
+        setSyncStatus({
+          inProgress: true,
+          stage: 'PROXY_SYNC',
+          progress: 1,
+          totalStages: 6,
+          message: 'Connecting to Binance via secure client proxy...',
+          tradesCount: 0,
+          transfersCount: 0,
+          isIncremental: !fullSync,
+        });
+
+        const lookback = (await getStoredSetting('lookback_range')) || 'all';
+
+        const updatedPortfolio = await runClientSync(
+          { fullSync, lookback },
+          (progressStatus) => {
+            setSyncStatus({ ...progressStatus, stage: 'PROXY_SYNC' });
+          }
+        );
+
+        setPortfolio(updatedPortfolio);
+        setSyncStatus((prev) => ({
+          ...prev,
+          inProgress: false,
+          stage: 'DONE',
+          progress: 6,
+          message: 'Sync completed successfully.',
+          lastSyncedAt: new Date().toLocaleTimeString(),
+        }));
+        setNotification({
+          type: 'success',
+          message: fullSync ? 'Full history sync completed successfully!' : 'Incremental sync completed successfully!',
+        });
+        return;
+      } catch (clientErr: any) {
+        setSyncStatus((prev) => ({
+          ...prev,
+          inProgress: false,
+          stage: 'ERROR',
+          message: clientErr.message || 'Client sync failed.',
+        }));
+        setNotification({
+          type: 'error',
+          message: clientErr.message || 'Client sync failed.',
+        });
+        return;
+      }
+    }
+
+    // Otherwise (localhost with server .env.local), run backend SQLite sync
     try {
       const res = await fetch('/api/sync', {
         method: 'POST',
@@ -124,7 +257,7 @@ export default function Home() {
         setNotification({
           type: 'success',
           message: fullSync
-            ? 'Binance full sync (8-year history) initiated.'
+            ? 'Binance full sync initiated.'
             : 'Incremental (Delta) sync initiated.',
         });
       } else {
@@ -166,6 +299,7 @@ export default function Home() {
         hasCredentials={hasCredentials}
         onSyncClick={handleStartSync}
         onOpenCsvModal={() => setIsCsvModalOpen(true)}
+        onOpenSettingsModal={() => setIsSettingsModalOpen(true)}
         onSeedDemo={handleSeedDemo}
       />
 
@@ -308,14 +442,15 @@ export default function Home() {
                   </div>
                   <h4 className="text-sm font-semibold text-slate-200">1. Connect via API Key</h4>
                   <p className="text-[11px] text-slate-400 mt-1">
-                    Paste your Read-Only Binance API credentials into <code className="text-sky-400">.env.local</code> in the project directory.
+                    Connect directly via the in-app Settings Hub or enter your keys into <code className="text-sky-400">.env.local</code>.
                   </p>
                 </div>
-                <div className="mt-4">
-                  <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
-                    <ShieldCheck className="w-3 h-3" /> Read-Only Permissions
-                  </span>
-                </div>
+                <button
+                  onClick={() => setIsSettingsModalOpen(true)}
+                  className="mt-4 w-full py-1.5 px-3 bg-sky-500 hover:bg-sky-400 text-slate-950 rounded-lg text-xs font-semibold transition-colors"
+                >
+                  Configure API Keys
+                </button>
               </div>
 
               {/* Option 2: CSV Upload */}
@@ -457,6 +592,13 @@ export default function Home() {
           fetchPortfolio();
           setNotification({ type: 'success', message: 'CSV imported successfully and PnL calculated!' });
         }}
+      />
+
+      {/* Terminal Settings & Data Hub Modal */}
+      <SettingsHubModal
+        isOpen={isSettingsModalOpen}
+        onClose={() => setIsSettingsModalOpen(false)}
+        onDataChanged={fetchPortfolio}
       />
     </div>
   );

@@ -84,6 +84,39 @@ export function getSyncStatus(): SyncStatus {
 
 export interface RunSyncOptions {
   fullSync?: boolean;
+  lookback?: string;
+}
+
+export function getLookbackStartTime(lookbackSetting?: string): { startTime: number; label: string } {
+  const setting = lookbackSetting?.trim().toLowerCase() || 'all';
+
+  if (setting === 'all' || setting === 'all-time' || setting === 'all_time') {
+    // Earliest genesis: 2017-01-01 covers 100% of Binance existence
+    return { startTime: new Date('2017-01-01').getTime(), label: 'All-Time' };
+  }
+  if (setting === '10y' || setting === '10_years') {
+    return { startTime: Date.now() - 10 * 365 * 24 * 60 * 60 * 1000, label: '10-Year History' };
+  }
+  if (setting === '8y' || setting === '8_years') {
+    return { startTime: Date.now() - 8 * 365 * 24 * 60 * 60 * 1000, label: '8-Year History' };
+  }
+  if (setting === '5y' || setting === '5_years') {
+    return { startTime: Date.now() - 5 * 365 * 24 * 60 * 60 * 1000, label: '5-Year History' };
+  }
+  if (setting === '3y' || setting === '3_years') {
+    return { startTime: Date.now() - 3 * 365 * 24 * 60 * 60 * 1000, label: '3-Year History' };
+  }
+  if (setting === '1y' || setting === '1_year') {
+    return { startTime: Date.now() - 365 * 24 * 60 * 60 * 1000, label: '1-Year History' };
+  }
+
+  // Custom year (e.g. "2015", "2016", "2018") or ISO date string
+  const parsed = new Date(setting).getTime();
+  if (!isNaN(parsed) && parsed > 0) {
+    return { startTime: parsed, label: `Since ${setting}` };
+  }
+
+  return { startTime: new Date('2017-01-01').getTime(), label: 'All-Time' };
 }
 
 export async function runSync(options?: RunSyncOptions, onProgress?: (status: SyncStatus) => void): Promise<SyncStatus> {
@@ -93,7 +126,7 @@ export async function runSync(options?: RunSyncOptions, onProgress?: (status: Sy
 
   const creds = getCredentials();
   if (!creds) {
-    throw new Error('BINANCE_API_KEY or BINANCE_API_SECRET not found in .env.local.');
+    throw new Error('Binance API Key or Secret not found (configure in Settings or .env.local).');
   }
 
   const db = getDb();
@@ -102,6 +135,10 @@ export async function runSync(options?: RunSyncOptions, onProgress?: (status: Sy
   db.exec("DELETE FROM trades WHERE id LIKE 'demo_%'");
   db.exec("DELETE FROM transfers WHERE id LIKE 'demo_%'");
   db.exec("DELETE FROM futures_income WHERE id LIKE 'demo_%'");
+
+  // Determine lookback start time
+  const lookbackRow = db.prepare("SELECT value FROM settings WHERE key = 'sync_lookback'").get() as { value: string } | undefined;
+  const { startTime: fullSyncStartTime, label: lookbackLabel } = getLookbackStartTime(options?.lookback || lookbackRow?.value);
 
   // Check if we can do an incremental (delta) sync
   const lastSyncAtRow = db.prepare('SELECT value FROM sync_state WHERE key = ?').get('last_synced_at') as { value: string } | undefined;
@@ -115,9 +152,11 @@ export async function runSync(options?: RunSyncOptions, onProgress?: (status: Sy
   const SAFETY_BUFFER = 48 * 60 * 60 * 1000;
   const syncStartTime = isIncremental
     ? Math.max(0, parsedLastSync! - SAFETY_BUFFER)
-    : Date.now() - 8 * 365 * 24 * 60 * 60 * 1000;
+    : fullSyncStartTime;
 
-  const syncStartDateStr = isIncremental ? new Date(syncStartTime).toLocaleDateString('en-US') : 'All History';
+  const syncStartDateStr = isIncremental
+    ? new Date(syncStartTime).toLocaleDateString('en-US')
+    : lookbackLabel;
 
   activeSync.inProgress = true;
   activeSync.progress = 1;
@@ -128,7 +167,7 @@ export async function runSync(options?: RunSyncOptions, onProgress?: (status: Sy
   activeSync.newTransfersCount = 0;
   activeSync.message = isIncremental
     ? `Delta synchronization starting (from ${syncStartDateStr} to present)...`
-    : 'Full synchronization (8-year history) starting...';
+    : `Full synchronization (${lookbackLabel}) starting...`;
   if (onProgress) onProgress(activeSync);
 
   let newTradesCount = 0;
@@ -217,7 +256,7 @@ export async function runSync(options?: RunSyncOptions, onProgress?: (status: Sy
     activeSync.progress = 3;
     activeSync.message = isIncremental
       ? 'Checking for new deposits and withdrawals since last sync...'
-      : 'Scanning 8-year deposit and withdrawal history...';
+      : `Scanning deposit and withdrawal history (${lookbackLabel})...`;
     if (onProgress) onProgress(activeSync);
 
     const insertTransferStmt = db.prepare(`
@@ -226,8 +265,8 @@ export async function runSync(options?: RunSyncOptions, onProgress?: (status: Sy
     `);
     const checkTransferStmt = db.prepare('SELECT id FROM transfers WHERE id = ?');
 
-    const deposits = await getCryptoDeposits(creds, isIncremental ? syncStartTime : undefined);
-    const withdrawals = await getCryptoWithdrawals(creds, isIncremental ? syncStartTime : undefined);
+    const deposits = await getCryptoDeposits(creds, syncStartTime);
+    const withdrawals = await getCryptoWithdrawals(creds, syncStartTime);
 
     db.exec('BEGIN TRANSACTION');
     for (const dep of deposits) {
@@ -263,8 +302,8 @@ export async function runSync(options?: RunSyncOptions, onProgress?: (status: Sy
     db.exec('COMMIT');
 
     // Fiat orders
-    const fiatDeposits = await getFiatOrders(0, isIncremental ? syncStartTime : undefined);
-    const fiatWithdrawals = await getFiatOrders(1, isIncremental ? syncStartTime : undefined);
+    const fiatDeposits = await getFiatOrders(0, syncStartTime);
+    const fiatWithdrawals = await getFiatOrders(1, syncStartTime);
 
     db.exec('BEGIN TRANSACTION');
     if (fiatDeposits.data) {
@@ -405,7 +444,7 @@ export async function runSync(options?: RunSyncOptions, onProgress?: (status: Sy
       const results = await Promise.all(
         chunk.map(async (pair) => {
           try {
-            const trades = await getSymbolTrades(pair, undefined, isIncremental ? syncStartTime : undefined);
+            const trades = await getSymbolTrades(pair, undefined, syncStartTime);
             return { pair, trades };
           } catch (err: unknown) {
             const error = err as Error;
@@ -499,7 +538,7 @@ export async function runSync(options?: RunSyncOptions, onProgress?: (status: Sy
       VALUES (?, ?, ?, ?, ?, ?)
     `);
 
-    const futuresIncome = await getFuturesIncome(isIncremental ? syncStartTime : undefined);
+    const futuresIncome = await getFuturesIncome(syncStartTime);
     if (futuresIncome && futuresIncome.length > 0) {
       db.exec('BEGIN TRANSACTION');
       for (const f of futuresIncome) {

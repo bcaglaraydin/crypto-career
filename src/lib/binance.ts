@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { getDb } from './db';
 
 const SPOT_BASE = 'https://api.binance.com';
 const FUTURES_BASE = 'https://fapi.binance.com';
@@ -6,16 +7,64 @@ const FUTURES_BASE = 'https://fapi.binance.com';
 export interface BinanceCredentials {
   apiKey: string;
   apiSecret: string;
+  source?: 'env' | 'database';
 }
 
 export function getCredentials(): BinanceCredentials | null {
-  const apiKey = process.env.BINANCE_API_KEY?.trim();
-  const apiSecret = process.env.BINANCE_API_SECRET?.trim();
+  const envApiKey = process.env.BINANCE_API_KEY?.trim();
+  const envApiSecret = process.env.BINANCE_API_SECRET?.trim();
 
-  if (!apiKey || !apiSecret) {
-    return null;
+  if (envApiKey && envApiSecret) {
+    return { apiKey: envApiKey, apiSecret: envApiSecret, source: 'env' };
   }
-  return { apiKey, apiSecret };
+
+  try {
+    const db = getDb();
+    const keyRow = db.prepare("SELECT value FROM settings WHERE key = 'binance_api_key'").get() as { value: string } | undefined;
+    const secretRow = db.prepare("SELECT value FROM settings WHERE key = 'binance_api_secret'").get() as { value: string } | undefined;
+
+    if (keyRow?.value && secretRow?.value) {
+      return { apiKey: keyRow.value.trim(), apiSecret: secretRow.value.trim(), source: 'database' };
+    }
+  } catch {
+    // Database may not be initialized yet
+  }
+
+  return null;
+}
+
+export async function testBinanceConnection(creds?: BinanceCredentials): Promise<{
+  success: boolean;
+  message: string;
+  accountType?: string;
+  permissions?: string[];
+  balancesCount?: number;
+}> {
+  try {
+    const account = await binanceRequest<{
+      accountType?: string;
+      permissions?: string[];
+      balances?: Array<{ asset: string; free: string; locked: string }>;
+    }>('/api/v3/account', {}, true, false, creds);
+
+    const nonZeroBalances = (account.balances || []).filter(
+      (b) => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0
+    ).length;
+
+    return {
+      success: true,
+      message: 'Connection successful! Read permissions verified.',
+      accountType: account.accountType || 'SPOT',
+      permissions: account.permissions || ['SPOT'],
+      balancesCount: nonZeroBalances,
+    };
+  } catch (err: unknown) {
+    const error = err as Error;
+    return {
+      success: false,
+      message: error.message || 'Failed to authenticate with Binance API.',
+    };
+  }
 }
 
 function signQuery(queryString: string, secret: string): string {
@@ -123,8 +172,8 @@ export async function getCryptoDeposits(creds?: BinanceCredentials, customStartT
 
   const NINETY_DAYS = 89 * 24 * 60 * 60 * 1000;
   const now = Date.now();
-  const EIGHT_YEARS_AGO = now - (8 * 365 * 24 * 60 * 60 * 1000);
-  const startFrom = customStartTime ? Math.max(customStartTime, EIGHT_YEARS_AGO) : EIGHT_YEARS_AGO;
+  const EARLIEST_DEFAULT_START = new Date('2017-01-01').getTime();
+  const startFrom = customStartTime !== undefined && customStartTime > 0 ? customStartTime : EARLIEST_DEFAULT_START;
 
   for (let start = startFrom; start < now; start += NINETY_DAYS) {
     const end = Math.min(start + NINETY_DAYS, now);
@@ -165,8 +214,8 @@ export async function getCryptoWithdrawals(creds?: BinanceCredentials, customSta
 
   const NINETY_DAYS = 89 * 24 * 60 * 60 * 1000;
   const now = Date.now();
-  const EIGHT_YEARS_AGO = now - (8 * 365 * 24 * 60 * 60 * 1000);
-  const startFrom = customStartTime ? Math.max(customStartTime, EIGHT_YEARS_AGO) : EIGHT_YEARS_AGO;
+  const EARLIEST_DEFAULT_START = new Date('2017-01-01').getTime();
+  const startFrom = customStartTime !== undefined && customStartTime > 0 ? customStartTime : EARLIEST_DEFAULT_START;
 
   for (let start = startFrom; start < now; start += NINETY_DAYS) {
     const end = Math.min(start + NINETY_DAYS, now);

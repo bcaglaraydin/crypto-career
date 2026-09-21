@@ -5,6 +5,8 @@ export interface CsvParseResult {
   tradesSkipped: number;
   transfersImported: number;
   errors: string[];
+  trades?: any[];
+  transfers?: any[];
 }
 
 function splitCsvLine(line: string): string[] {
@@ -27,7 +29,13 @@ function splitCsvLine(line: string): string[] {
 }
 
 export function parseBinanceCsv(csvContent: string): CsvParseResult {
-  const db = getDb();
+  let db: any = null;
+  try {
+    db = getDb();
+  } catch (dbErr) {
+    console.warn('SQLite DB unavailable for CSV import, running purely stateless:', dbErr);
+  }
+
   const lines = csvContent.split(/\r?\n/).filter((l) => l.trim().length > 0);
   if (lines.length < 2) {
     return { tradesImported: 0, tradesSkipped: 0, transfersImported: 0, errors: ['CSV file is empty or invalid.'] };
@@ -40,28 +48,49 @@ export function parseBinanceCsv(csvContent: string): CsvParseResult {
   let tradesSkipped = 0;
   let transfersImported = 0;
   const errors: string[] = [];
+  const parsedTrades: any[] = [];
+  const parsedTransfers: any[] = [];
 
-  // Load all existing trades from the database for anti-duplicate matching
-  const existingTrades = db.prepare('SELECT id, symbol, side, price, qty, time FROM trades').all() as Array<{
+  // Load all existing trades from the database for anti-duplicate matching if DB available
+  const existingTrades: Array<{
     id: string;
     symbol: string;
     side: string;
     price: number;
     qty: number;
     time: number;
-  }>;
+  }> = [];
 
-  const insertTradeStmt = db.prepare(`
-    INSERT OR REPLACE INTO trades (id, source, symbol, base_asset, quote_asset, side, price, qty, quote_qty, commission, commission_asset, time)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
+  let insertTradeStmt: any = null;
+  let insertTransferStmt: any = null;
 
-  const insertTransferStmt = db.prepare(`
-    INSERT OR REPLACE INTO transfers (id, asset, amount, type, fiat_or_crypto, time, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
+  if (db) {
+    try {
+      const dbTrades = db.prepare('SELECT id, symbol, side, price, qty, time FROM trades').all() as Array<{
+        id: string;
+        symbol: string;
+        side: string;
+        price: number;
+        qty: number;
+        time: number;
+      }>;
+      existingTrades.push(...dbTrades);
 
-  db.exec('BEGIN TRANSACTION');
+      insertTradeStmt = db.prepare(`
+        INSERT OR REPLACE INTO trades (id, source, symbol, base_asset, quote_asset, side, price, qty, quote_qty, commission, commission_asset, time)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      insertTransferStmt = db.prepare(`
+        INSERT OR REPLACE INTO transfers (id, asset, amount, type, fiat_or_crypto, time, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      db.exec('BEGIN TRANSACTION');
+    } catch (e) {
+      console.warn('Could not initialize DB transaction in CSV parser:', e);
+    }
+  }
 
   try {
     const isTradeHistory = rawHeader.includes('pair') || rawHeader.includes('market') || rawHeader.includes('price');
@@ -141,17 +170,14 @@ export function parseBinanceCsv(csvContent: string): CsvParseResult {
         }
         const baseAsset = pair.substring(0, pair.length - quoteAsset.length) || pair;
 
-        // 1. DUPLICATE CHECK: Verify if this trade already exists in DB
-        // Check against existing trades (e.g. from API or previous import)
+        // 1. DUPLICATE CHECK: Verify if this trade already exists in DB or current import batch
         const isDuplicate = existingTrades.some((ex) => {
           if (ex.symbol !== pair || ex.side !== side) return false;
           const qtyDiff = Math.abs(ex.qty - qty) / (qty || 1);
           const priceDiff = Math.abs(ex.price - price) / (price || 1);
           const timeDiff = Math.abs(ex.time - time);
 
-          // If exact same qty and price within 10 seconds, it's definitely the same trade
           if (qtyDiff < 0.0001 && priceDiff < 0.0001 && timeDiff < 10000) return true;
-          // Or if on the exact same second
           if (Math.abs(Math.floor(ex.time / 1000) - Math.floor(time / 1000)) === 0 && qtyDiff < 0.001) return true;
 
           return false;
@@ -165,9 +191,30 @@ export function parseBinanceCsv(csvContent: string): CsvParseResult {
         const orderNo = orderNoIdx !== -1 ? cleanParts[orderNoIdx] : '';
         const tradeId = orderNo ? `csv_order_${orderNo}_${i}` : `csv_trade_${time}_${pair}_${i}`;
 
-        insertTradeStmt.run(tradeId, 'CSV', pair, baseAsset, quoteAsset, side, price, qty, quoteQty, fee, feeCoin, time);
+        const tradeItem = {
+          id: tradeId,
+          source: 'CSV',
+          symbol: pair,
+          base_asset: baseAsset,
+          quote_asset: quoteAsset,
+          side,
+          price,
+          qty,
+          quote_qty: quoteQty,
+          commission: fee,
+          commission_asset: feeCoin,
+          time,
+        };
 
-        // Add to in-memory list so duplicates within the CSV itself are also caught
+        if (insertTradeStmt) {
+          try {
+            insertTradeStmt.run(tradeId, 'CSV', pair, baseAsset, quoteAsset, side, price, qty, quoteQty, fee, feeCoin, time);
+          } catch (insertErr) {
+            console.warn('DB insertTradeStmt failed:', insertErr);
+          }
+        }
+
+        parsedTrades.push(tradeItem);
         existingTrades.push({ id: tradeId, symbol: pair, side, price, qty, time });
         tradesImported++;
       }
@@ -191,21 +238,72 @@ export function parseBinanceCsv(csvContent: string): CsvParseResult {
         const change = parseFloat(cleanParts[changeIdx]) || 0;
 
         if (op.includes('deposit')) {
-          insertTransferStmt.run(`csv_dep_${time}_${i}`, coin, Math.abs(change), 'DEPOSIT', 'CRYPTO', time, 'SUCCESS');
+          const transferId = `csv_dep_${time}_${i}`;
+          const transferItem = {
+            id: transferId,
+            asset: coin,
+            amount: Math.abs(change),
+            type: 'DEPOSIT',
+            fiat_or_crypto: 'CRYPTO',
+            time,
+            status: 'SUCCESS',
+          };
+          if (insertTransferStmt) {
+            try {
+              insertTransferStmt.run(transferId, coin, Math.abs(change), 'DEPOSIT', 'CRYPTO', time, 'SUCCESS');
+            } catch (insertErr) {
+              console.warn('DB insertTransferStmt failed:', insertErr);
+            }
+          }
+          parsedTransfers.push(transferItem);
           transfersImported++;
         } else if (op.includes('withdraw')) {
-          insertTransferStmt.run(`csv_wd_${time}_${i}`, coin, Math.abs(change), 'WITHDRAW', 'CRYPTO', time, 'SUCCESS');
+          const transferId = `csv_wd_${time}_${i}`;
+          const transferItem = {
+            id: transferId,
+            asset: coin,
+            amount: Math.abs(change),
+            type: 'WITHDRAW',
+            fiat_or_crypto: 'CRYPTO',
+            time,
+            status: 'SUCCESS',
+          };
+          if (insertTransferStmt) {
+            try {
+              insertTransferStmt.run(transferId, coin, Math.abs(change), 'WITHDRAW', 'CRYPTO', time, 'SUCCESS');
+            } catch (insertErr) {
+              console.warn('DB insertTransferStmt failed:', insertErr);
+            }
+          }
+          parsedTransfers.push(transferItem);
           transfersImported++;
         }
       }
     }
 
-    db.exec('COMMIT');
+    if (db) {
+      try {
+        db.exec('COMMIT');
+      } catch (commitErr) {
+        console.warn('DB commit warning:', commitErr);
+      }
+    }
   } catch (err: unknown) {
-    db.exec('ROLLBACK');
+    if (db) {
+      try {
+        db.exec('ROLLBACK');
+      } catch {}
+    }
     const error = err as Error;
     errors.push(error.message);
   }
 
-  return { tradesImported, tradesSkipped, transfersImported, errors };
+  return {
+    tradesImported,
+    tradesSkipped,
+    transfersImported,
+    errors,
+    trades: parsedTrades,
+    transfers: parsedTransfers,
+  };
 }

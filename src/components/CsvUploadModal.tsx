@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { Upload, X, CheckCircle, AlertCircle, FileText } from 'lucide-react';
+import { saveStoredTrades, saveStoredTransfers } from '@/lib/client-storage';
 
 interface CsvUploadModalProps {
   isOpen: boolean;
@@ -34,6 +35,13 @@ export const CsvUploadModal: React.FC<CsvUploadModalProps> = ({ isOpen, onClose,
       const data = await res.json();
 
       if (data.success) {
+        if (data.result?.trades && data.result.trades.length > 0) {
+          await saveStoredTrades(data.result.trades);
+        }
+        if (data.result?.transfers && data.result.transfers.length > 0) {
+          await saveStoredTransfers(data.result.transfers);
+        }
+
         setResult({
           trades: data.result.tradesImported,
           transfers: data.result.transfersImported,

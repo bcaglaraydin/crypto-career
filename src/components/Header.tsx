@@ -11,6 +11,7 @@ interface HeaderProps {
   hasCredentials: boolean;
   onSyncClick: (fullSync?: boolean) => void;
   onOpenCsvModal: () => void;
+  onOpenSettingsModal: () => void;
   onSeedDemo: () => void;
 }
 
@@ -21,6 +22,7 @@ export const Header: React.FC<HeaderProps> = ({
   hasCredentials,
   onSyncClick,
   onOpenCsvModal,
+  onOpenSettingsModal,
   onSeedDemo,
 }) => {
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -70,8 +72,12 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           )}
 
-          {/* API Key Status Pill */}
-          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#121722] border border-[#1e2738] text-xs">
+          {/* API Key Status Pill (Clickable -> Opens Settings Hub) */}
+          <button
+            onClick={onOpenSettingsModal}
+            title="Configure Binance API and History Settings"
+            className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#121722] hover:bg-[#18202f] border border-[#1e2738] hover:border-slate-700 text-xs transition-colors cursor-pointer"
+          >
             {hasCredentials ? (
               <>
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
@@ -79,11 +85,11 @@ export const Header: React.FC<HeaderProps> = ({
               </>
             ) : (
               <>
-                <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
-                <span className="text-slate-400 font-mono text-[11px]">Awaiting .env.local</span>
+                <AlertCircle className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+                <span className="text-amber-400 font-mono text-[11px] font-medium">Connect API</span>
               </>
             )}
-          </div>
+          </button>
 
           {/* Currency Switcher (USD / TRY) */}
           <div className="flex items-center bg-[#121722] border border-[#1e2738] rounded-lg p-0.5 sm:p-1 text-xs font-semibold">
@@ -111,24 +117,22 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           </div>
 
-          {/* CSV Import Button */}
+          {/* Unified Settings & Data Hub Button */}
           <button
-            onClick={onOpenCsvModal}
-            title="Import Binance Historical CSV"
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-[#121722] hover:bg-[#18202f] border border-[#1e2738] text-slate-300 hover:text-white rounded-lg text-xs font-medium transition-colors"
+            onClick={onOpenSettingsModal}
+            title="Terminal Settings & Data Hub"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-[#121722] hover:bg-[#18202f] border border-[#1e2738] hover:border-sky-500/40 text-slate-300 hover:text-white rounded-lg text-xs font-semibold transition-colors"
           >
-            <Upload className="w-3.5 h-3.5 text-sky-400" />
-            <span className="hidden md:inline">Import CSV</span>
-          </button>
-
-          {/* Demo Seed Button */}
-          <button
-            onClick={onSeedDemo}
-            title="Explore demo portfolio"
-            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 bg-[#121722] hover:bg-[#18202f] border border-[#1e2738] text-slate-400 hover:text-amber-400 rounded-lg text-xs font-medium transition-colors"
-          >
-            <Database className="w-3.5 h-3.5" />
-            <span className="hidden lg:inline">Demo Data</span>
+            <div className="relative">
+              <Upload className="w-3.5 h-3.5 text-sky-400 sm:hidden" />
+              <Coins className="w-3.5 h-3.5 text-sky-400 hidden sm:block" />
+              <span
+                className={`absolute -top-1 -right-1 w-2 h-2 rounded-full ${
+                  hasCredentials ? 'bg-emerald-400' : 'bg-amber-400 animate-ping'
+                }`}
+              />
+            </div>
+            <span className="hidden sm:inline">Settings Hub</span>
           </button>
 
           {/* Binance API Sync Button Group (Incremental by default + Full Sync option) */}
@@ -198,10 +202,10 @@ export const Header: React.FC<HeaderProps> = ({
                 >
                   <div className="flex items-center gap-1.5 font-semibold text-amber-400">
                     <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Full Sync (8-Year History)</span>
+                    <span>Full History Sync</span>
                   </div>
                   <span className="text-[11px] text-slate-400">
-                    Performs a complete rescan of all order and transfer history from 2017 to date.
+                    Performs a complete scan of all trades, cash flows, and income across configured lookback range.
                   </span>
                 </button>
               </div>
@@ -216,7 +220,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="flex items-center gap-2 max-w-3xl truncate">
             <RefreshCw className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
             <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-sky-500/20 text-sky-300 border border-sky-500/30">
-              {syncStatus.isIncremental ? 'DELTA SYNC' : 'FULL SCAN (8 YEARS)'}
+              {syncStatus.isIncremental ? 'DELTA SYNC' : 'FULL HISTORY SCAN'}
             </span>
             <span className="truncate">{syncStatus.message}</span>
           </div>

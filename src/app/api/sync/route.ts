@@ -14,17 +14,19 @@ export async function POST(req: Request) {
     }
 
     let fullSync = false;
+    let lookback: string | undefined = undefined;
     try {
       const body = await req.json();
-      if (body && body.fullSync) {
-        fullSync = true;
+      if (body) {
+        if (body.fullSync) fullSync = true;
+        if (body.lookback) lookback = String(body.lookback);
       }
     } catch {
       // Body may be empty or not json, default to incremental sync
     }
 
     // Trigger sync asynchronously in background
-    runSync({ fullSync }).catch((err) => {
+    runSync({ fullSync, lookback }).catch((err) => {
       console.error('Background sync failed:', err);
     });
 

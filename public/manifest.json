@@ -1,0 +1,16 @@
+{
+  "name": "Binance Lifetime PnL & Portfolio Terminal",
+  "short_name": "CryptoTrack",
+  "description": "Historical FX-adjusted lifetime PnL, cost basis, spot holdings, and cash flow analytics platform",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b0e14",
+  "theme_color": "#0b0e14",
+  "icons": [
+    {
+      "src": "/globe.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}

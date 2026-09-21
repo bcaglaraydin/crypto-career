@@ -143,7 +143,19 @@ This document serves as the **Single Source of Truth** for all UI, UX, styling, 
 
 ---
 
-## 8. Maintenance Rule
+## 8. Unified Management Modal & Settings Hub Pattern
+
+- **Single Hub Principle:** All administrative, setup, credential management, historical lookback ranges, external file ingestion (CSV), and network connection configurations must be centralized into a single unified dialog (`SettingsHubModal`).
+- **Modal Architecture:**
+  - **Dark Backdrop:** `bg-black/80 backdrop-blur-md z-50` with centered, rounded container (`rounded-2xl border border-[#1e2738] bg-[#121722] max-h-[92vh]`).
+  - **Tabbed Sub-Navigation:** Segmented tabs across the top (`API Credentials`, `History Lookback`, `CSV Import`, `Mobile Access`, `Database & Demo`) with active indicators.
+  - **Inline Verification:** Credential inputs must include inline live test actions (`Test Credentials`) with real-time semantic status pills (`bg-emerald-500/10 text-emerald-300` or `bg-rose-500/10 text-rose-300`).
+  - **Step-by-Step Educational Guides:** In-modal visual tutorials with ordered lists, security disclaimers (emphasizing read-only permissions and local SQLite storage), and direct external links to Binance management pages.
+  - **Network & LAN Address Discovery:** Render detected Wi-Fi/Ethernet IPv4 URLs with single-tap copy actions (`Copy Link`) for frictionless mobile onboarding.
+
+---
+
+## 9. Maintenance Rule
 
 Any new component, color variation, or visual interaction must be evaluated against this document. When a new recurring design pattern emerges, update this document first to preserve long-term consistency.
 

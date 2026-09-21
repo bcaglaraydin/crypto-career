@@ -168,14 +168,86 @@ export interface PortfolioOverview {
   spotUnrealizedPnL_TRY: number;
 }
 
-export function getHistoricalRate(dayStr: string, defaultRate = 38.0): number {
-  const db = getDb();
-  const stmt = db.prepare('SELECT rate FROM historical_rates WHERE day = ?');
-  const row = stmt.get(dayStr) as { rate: number } | undefined;
-  return row ? row.rate : defaultRate;
+export interface PortfolioDataset {
+  trades?: Array<{
+    id: string;
+    source: string;
+    symbol: string;
+    base_asset: string;
+    quote_asset: string;
+    side: string;
+    price: number;
+    qty: number;
+    quote_qty: number;
+    commission: number;
+    commission_asset: string;
+    time: number;
+  }>;
+  transfers?: Array<{
+    id: string;
+    asset: string;
+    amount: number;
+    type: string;
+    fiat_or_crypto: string;
+    time: number;
+    status?: string;
+  }>;
+  spotBalances?: Array<{
+    asset: string;
+    free: number;
+    locked: number;
+  }>;
+  walletBalances?: Array<{
+    wallet_name: string;
+    balance_btc: number;
+    balance_usdt: number;
+  }>;
+  futuresPositions?: Array<{
+    symbol: string;
+    position_amt: number;
+    entry_price: number;
+    mark_price: number;
+    unrealized_profit: number;
+    liquidation_price: number;
+    leverage: number;
+    notional: number;
+    margin_type: string;
+    position_side: string;
+    update_time: number;
+  }>;
+  futuresIncome?: Array<{
+    id: string;
+    symbol: string;
+    asset: string;
+    income: number;
+    income_type: string;
+    time: number;
+  }>;
+  customCosts?: Record<string, number>;
+  historicalRates?: Record<string, number>;
+  historicalCryptoRates?: Record<string, number>;
+  tickerPrices?: Record<string, number>;
 }
 
-export function getHistoricalCryptoRate(pair: string, dayStr: string): number | null {
+export function getHistoricalRate(dayStr: string, defaultRate = 38.0, ratesMap?: Record<string, number>): number {
+  if (ratesMap && ratesMap[dayStr] !== undefined) {
+    return ratesMap[dayStr];
+  }
+  try {
+    const db = getDb();
+    const stmt = db.prepare('SELECT rate FROM historical_rates WHERE day = ?');
+    const row = stmt.get(dayStr) as { rate: number } | undefined;
+    return row ? row.rate : defaultRate;
+  } catch {
+    return defaultRate;
+  }
+}
+
+export function getHistoricalCryptoRate(pair: string, dayStr: string, cryptoRatesMap?: Record<string, number>): number | null {
+  if (cryptoRatesMap) {
+    const key = `${pair}_${dayStr}`;
+    if (cryptoRatesMap[key] !== undefined) return cryptoRatesMap[key];
+  }
   try {
     const db = getDb();
     const stmt = db.prepare('SELECT rate FROM historical_crypto_rates WHERE pair = ? AND day = ?');
@@ -191,55 +263,77 @@ export function timestampToDayStr(timestamp: number): string {
   return date.toISOString().split('T')[0];
 }
 
-export async function calculatePortfolio(): Promise<PortfolioOverview> {
-  const db = getDb();
+export async function calculatePortfolio(dataset?: PortfolioDataset): Promise<PortfolioOverview> {
+  const db = !dataset ? getDb() : null;
 
   // 1. Fetch current prices
   let tickerMap: Record<string, number> = {};
-  try {
-    const tickers = await getAllPrices();
-    for (const t of tickers) {
-      tickerMap[t.symbol] = parseFloat(t.price);
+  if (dataset?.tickerPrices && Object.keys(dataset.tickerPrices).length > 0) {
+    tickerMap = dataset.tickerPrices;
+  } else {
+    try {
+      const tickers = await getAllPrices();
+      for (const t of tickers) {
+        tickerMap[t.symbol] = parseFloat(t.price);
+      }
+    } catch (e) {
+      console.warn('Could not fetch latest tickers:', e);
     }
-  } catch (e) {
-    console.warn('Could not fetch latest tickers:', e);
   }
 
   const currentUsdtTryRate = tickerMap['USDTTRY'] || 38.5;
 
   // 2. Fetch custom cost overrides
-  const customCostRows = db.prepare('SELECT asset, cost_usd FROM custom_costs').all() as Array<{ asset: string; cost_usd: number }>;
   const customCostMap: Record<string, number> = {};
-  for (const c of customCostRows) {
-    customCostMap[c.asset.toUpperCase()] = c.cost_usd;
+  if (dataset?.customCosts) {
+    for (const [cAsset, costVal] of Object.entries(dataset.customCosts)) {
+      customCostMap[cAsset.toUpperCase()] = costVal;
+    }
+  } else if (db) {
+    const customCostRows = db.prepare('SELECT asset, cost_usd FROM custom_costs').all() as Array<{ asset: string; cost_usd: number }>;
+    for (const c of customCostRows) {
+      customCostMap[c.asset.toUpperCase()] = c.cost_usd;
+    }
   }
 
   // 3. Fetch live Spot Balances
-  const spotBalancesStmt = db.prepare('SELECT asset, free, locked FROM spot_balances');
-  const spotBalanceRows = spotBalancesStmt.all() as Array<{ asset: string; free: number; locked: number }>;
   const liveSpotBalances: Record<string, number> = {};
-
-  for (const b of spotBalanceRows) {
-    const total = b.free + b.locked;
-    if (total > 0) {
-      liveSpotBalances[b.asset.toUpperCase()] = total;
+  if (dataset?.spotBalances) {
+    for (const b of dataset.spotBalances) {
+      const total = b.free + b.locked;
+      if (total > 0) liveSpotBalances[b.asset.toUpperCase()] = total;
+    }
+  } else if (db) {
+    const spotBalancesStmt = db.prepare('SELECT asset, free, locked FROM spot_balances');
+    const spotBalanceRows = spotBalancesStmt.all() as Array<{ asset: string; free: number; locked: number }>;
+    for (const b of spotBalanceRows) {
+      const total = b.free + b.locked;
+      if (total > 0) {
+        liveSpotBalances[b.asset.toUpperCase()] = total;
+      }
     }
   }
 
   // 4. Fetch live Wallet Balances
-  const walletStmt = db.prepare('SELECT wallet_name, balance_btc, balance_usdt FROM wallet_balances');
-  const walletRows = walletStmt.all() as Array<{ wallet_name: string; balance_btc: number; balance_usdt: number }>;
-
   let futuresValueUSD = 0;
-  for (const w of walletRows) {
-    if (w.wallet_name.toLowerCase().includes('futures')) {
-      futuresValueUSD += w.balance_usdt;
+  if (dataset?.walletBalances) {
+    for (const w of dataset.walletBalances) {
+      if (w.wallet_name.toLowerCase().includes('futures')) {
+        futuresValueUSD += w.balance_usdt;
+      }
+    }
+  } else if (db) {
+    const walletStmt = db.prepare('SELECT wallet_name, balance_btc, balance_usdt FROM wallet_balances');
+    const walletRows = walletStmt.all() as Array<{ wallet_name: string; balance_btc: number; balance_usdt: number }>;
+    for (const w of walletRows) {
+      if (w.wallet_name.toLowerCase().includes('futures')) {
+        futuresValueUSD += w.balance_usdt;
+      }
     }
   }
 
   // 4b. Fetch Open Futures Positions (Live or DB)
-  const positionsStmt = db.prepare('SELECT * FROM futures_positions');
-  let positionRows = positionsStmt.all() as Array<{
+  let positionRows: Array<{
     symbol: string;
     position_amt: number;
     entry_price: number;
@@ -251,39 +345,46 @@ export async function calculatePortfolio(): Promise<PortfolioOverview> {
     margin_type: string;
     position_side: string;
     update_time: number;
-  }>;
+  }> = [];
 
-  if (positionRows.length === 0) {
-    try {
-      const livePositions = await getFuturesPositions();
-      if (livePositions.length > 0) {
-        const insertPositionStmt = db.prepare(`
-          INSERT OR REPLACE INTO futures_positions (
-            symbol, position_amt, entry_price, mark_price, unrealized_profit,
-            liquidation_price, leverage, notional, margin_type, position_side, update_time
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        db.exec('BEGIN TRANSACTION');
-        for (const p of livePositions) {
-          insertPositionStmt.run(
-            p.symbol,
-            parseFloat(p.positionAmt),
-            parseFloat(p.entryPrice),
-            parseFloat(p.markPrice),
-            parseFloat(p.unRealizedProfit),
-            parseFloat(p.liquidationPrice),
-            parseInt(p.leverage, 10),
-            parseFloat(p.notional),
-            p.marginType,
-            p.positionSide,
-            p.updateTime
-          );
+  if (dataset?.futuresPositions) {
+    positionRows = dataset.futuresPositions;
+  } else if (db) {
+    const positionsStmt = db.prepare('SELECT * FROM futures_positions');
+    positionRows = positionsStmt.all() as typeof positionRows;
+
+    if (positionRows.length === 0) {
+      try {
+        const livePositions = await getFuturesPositions();
+        if (livePositions.length > 0) {
+          const insertPositionStmt = db.prepare(`
+            INSERT OR REPLACE INTO futures_positions (
+              symbol, position_amt, entry_price, mark_price, unrealized_profit,
+              liquidation_price, leverage, notional, margin_type, position_side, update_time
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          db.exec('BEGIN TRANSACTION');
+          for (const p of livePositions) {
+            insertPositionStmt.run(
+              p.symbol,
+              parseFloat(p.positionAmt),
+              parseFloat(p.entryPrice),
+              parseFloat(p.markPrice),
+              parseFloat(p.unRealizedProfit),
+              parseFloat(p.liquidationPrice),
+              parseInt(p.leverage, 10),
+              parseFloat(p.notional),
+              p.marginType,
+              p.positionSide,
+              p.updateTime
+            );
+          }
+          db.exec('COMMIT');
+          positionRows = positionsStmt.all() as typeof positionRows;
         }
-        db.exec('COMMIT');
-        positionRows = positionsStmt.all() as typeof positionRows;
+      } catch {
+        // Offline fallback
       }
-    } catch {
-      // Offline fallback
     }
   }
 
@@ -315,13 +416,9 @@ export async function calculatePortfolio(): Promise<PortfolioOverview> {
   const futuresUnrealizedPnL_TRY = futuresPositions.reduce((s, p) => s + p.unrealizedProfitTRY, 0);
 
   // 5. Fetch all deposits to match purchase dates for transferred coins
-  const depositsStmt = db.prepare("SELECT * FROM transfers WHERE type = 'DEPOSIT' ORDER BY time ASC");
-  const allDeposits = depositsStmt.all() as Array<{
-    id: string;
-    asset: string;
-    amount: number;
-    time: number;
-  }>;
+  const allDeposits: Array<{ id: string; asset: string; amount: number; time: number }> = dataset?.transfers
+    ? (dataset.transfers.filter((t) => t.type === 'DEPOSIT') as Array<{ id: string; asset: string; amount: number; time: number }>).sort((a, b) => a.time - b.time)
+    : (db ? (db.prepare("SELECT * FROM transfers WHERE type = 'DEPOSIT' ORDER BY time ASC").all() as any[]) : []);
 
   // Helper to get estimated cost on deposit dates
   // For BTC: user deposited USDT between 2020 and 2022 ($165, $100, $150, $99, $100, $100, $124)
@@ -334,8 +431,7 @@ export async function calculatePortfolio(): Promise<PortfolioOverview> {
   };
 
   // 6. Fetch all trades ordered by time
-  const tradesStmt = db.prepare(`SELECT * FROM trades ORDER BY time ASC`);
-  const trades = tradesStmt.all() as Array<{
+  const trades: Array<{
     id: string;
     source: string;
     symbol: string;
@@ -348,7 +444,9 @@ export async function calculatePortfolio(): Promise<PortfolioOverview> {
     commission: number;
     commission_asset: string;
     time: number;
-  }>;
+  }> = dataset?.trades
+    ? [...dataset.trades].sort((a, b) => a.time - b.time)
+    : (db ? (db.prepare(`SELECT * FROM trades ORDER BY time ASC`).all() as any[]) : []);
 
   interface AssetTracker {
     asset: string;
@@ -484,19 +582,20 @@ export async function calculatePortfolio(): Promise<PortfolioOverview> {
   }
 
   // 7. Futures Income
-  const futuresStmt = db.prepare('SELECT * FROM futures_income ORDER BY time ASC');
-  const futuresRows = futuresStmt.all() as Array<{
+  const futuresRows: Array<{
     id: string;
     symbol: string;
     asset: string;
     income: number;
     income_type: string;
     time: number;
-  }>;
+  }> = dataset?.futuresIncome
+    ? [...dataset.futuresIncome].sort((a, b) => a.time - b.time)
+    : (db ? (db.prepare('SELECT * FROM futures_income ORDER BY time ASC').all() as any[]) : []);
 
   for (const f of futuresRows) {
     const dayStr = timestampToDayStr(f.time);
-    const dayRate = getHistoricalRate(dayStr, currentUsdtTryRate);
+    const dayRate = getHistoricalRate(dayStr, currentUsdtTryRate, dataset?.historicalRates);
     const assetTracker = getTracker(f.asset || 'USDT');
 
     assetTracker.realizedPnL_USD += f.income;
@@ -615,15 +714,16 @@ export async function calculatePortfolio(): Promise<PortfolioOverview> {
   const topLosers = [...coinSummaries].sort((a, b) => a.totalPnL_USD - b.totalPnL_USD).filter((c) => c.totalPnL_USD < -0.1).slice(0, 5);
 
   // 9. Calculate Transfers
-  const transfersStmt = db.prepare('SELECT * FROM transfers ORDER BY time DESC');
-  const rawTransfers = transfersStmt.all() as Array<{
+  const rawTransfers: Array<{
     id: string;
     asset: string;
     amount: number;
     type: 'DEPOSIT' | 'WITHDRAW';
     fiat_or_crypto: string;
     time: number;
-  }>;
+  }> = dataset?.transfers
+    ? ([...dataset.transfers].sort((a, b) => b.time - a.time) as any[])
+    : (db ? (db.prepare('SELECT * FROM transfers ORDER BY time DESC').all() as any[]) : []);
 
   let totalDepositedUSD = 0;
   let totalDepositedTRY = 0;
@@ -632,7 +732,7 @@ export async function calculatePortfolio(): Promise<PortfolioOverview> {
 
   const recentTransfers = rawTransfers.map((tr) => {
     const dayStr = timestampToDayStr(tr.time);
-    const dayRate = getHistoricalRate(dayStr, currentUsdtTryRate);
+    const dayRate = getHistoricalRate(dayStr, currentUsdtTryRate, dataset?.historicalRates);
     let amountUSD = 0;
 
     if (tr.asset === 'TRY') {
@@ -640,7 +740,7 @@ export async function calculatePortfolio(): Promise<PortfolioOverview> {
     } else if (['USDT', 'BUSD', 'USDC', 'FDUSD'].includes(tr.asset)) {
       amountUSD = tr.amount;
     } else {
-      const histCryptoRate = getHistoricalCryptoRate(`${tr.asset}USDT`, dayStr);
+      const histCryptoRate = getHistoricalCryptoRate(`${tr.asset}USDT`, dayStr, dataset?.historicalCryptoRates);
       if (histCryptoRate) {
         amountUSD = tr.amount * histCryptoRate;
       } else {
@@ -760,7 +860,7 @@ export async function calculatePortfolio(): Promise<PortfolioOverview> {
     if (tr.quote_asset === 'TRY') volUSD = tr.quote_qty / dayRate;
     else if (['USDT', 'BUSD', 'USDC', 'FDUSD'].includes(tr.quote_asset)) volUSD = tr.quote_qty;
     else {
-      const histRate = getHistoricalCryptoRate(`${tr.quote_asset}USDT`, dayStr);
+      const histRate = getHistoricalCryptoRate(`${tr.quote_asset}USDT`, dayStr, dataset?.historicalCryptoRates);
       volUSD = histRate ? tr.quote_qty * histRate : (tickerMap[`${tr.quote_asset}USDT`] || 0) * tr.quote_qty;
     }
 
@@ -870,7 +970,7 @@ export async function calculatePortfolio(): Promise<PortfolioOverview> {
 
   const netWorthTimeline: NetWorthTimelinePoint[] = allTimelineDates.map((date, idx) => {
     const isToday = date === todayStr || idx === allTimelineDates.length - 1;
-    const dayRate = getHistoricalRate(date, currentUsdtTryRate);
+    const dayRate = getHistoricalRate(date, currentUsdtTryRate, dataset?.historicalRates);
     if (dailyCashFlowMap[date]) {
       cumNetDepositsUSD += dailyCashFlowMap[date].depositsUSD - dailyCashFlowMap[date].withdrawalsUSD;
     }
@@ -922,9 +1022,13 @@ export async function calculatePortfolio(): Promise<PortfolioOverview> {
 
   // Preload historical crypto rates map for O(1) instant lookup
   const mtmRateMap: Record<string, number> = {};
-  const allRatesRows = db.prepare('SELECT pair, day, rate FROM historical_crypto_rates').all() as Array<{ pair: string; day: string; rate: number }>;
-  for (const r of allRatesRows) {
-    mtmRateMap[`${r.pair}_${r.day}`] = r.rate;
+  if (dataset?.historicalCryptoRates) {
+    Object.assign(mtmRateMap, dataset.historicalCryptoRates);
+  } else if (db) {
+    const allRatesRows = db.prepare('SELECT pair, day, rate FROM historical_crypto_rates').all() as Array<{ pair: string; day: string; rate: number }>;
+    for (const r of allRatesRows) {
+      mtmRateMap[`${r.pair}_${r.day}`] = r.rate;
+    }
   }
 
   const mtmHoldings: Record<string, number> = {};

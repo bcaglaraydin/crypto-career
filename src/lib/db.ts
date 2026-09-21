@@ -1,7 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 
-const DB_PATH = path.join(process.cwd(), 'crypto_tracker.db');
+const isServerless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT);
+const DB_PATH = isServerless
+  ? path.join('/tmp', 'crypto_tracker.db')
+  : path.join(process.cwd(), 'crypto_tracker.db');
 
 let dbInstance: DatabaseSync | null = null;
 
@@ -96,6 +99,11 @@ function initSchema(db: DatabaseSync) {
     );
 
     CREATE TABLE IF NOT EXISTS sync_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
