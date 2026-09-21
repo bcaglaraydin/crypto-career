@@ -597,6 +597,36 @@ export async function calculatePortfolio(dataset?: PortfolioDataset): Promise<Po
       pnlTimelineMap[dayStr].pnlUSD += realizedProfitUSD;
       pnlTimelineMap[dayStr].pnlTRY += realizedProfitTRY;
     }
+
+    // Handle quote asset in crypto-to-crypto trades (e.g., ADA/BTC, FET/BNB)
+    if (!['USDT', 'BUSD', 'FDUSD', 'USDC', 'TRY'].includes(trade.quote_asset)) {
+      const quoteTracker = getTracker(trade.quote_asset);
+      if (trade.side === 'BUY') {
+        // User spent quote asset to buy base asset
+        const quoteAvgCostUSD = quoteTracker.virtualHolding > 0
+          ? quoteTracker.totalCostUSD / quoteTracker.virtualHolding
+          : (trade.quote_qty > 0 ? tradeValueUSD / trade.quote_qty : 0);
+        const quoteCostBasisUSD = quoteAvgCostUSD * trade.quote_qty;
+        const quoteCostBasisTRY = quoteCostBasisUSD * dayRate;
+
+        quoteTracker.virtualHolding = Math.max(0, quoteTracker.virtualHolding - trade.quote_qty);
+        if (quoteTracker.virtualHolding === 0) {
+          quoteTracker.totalCostUSD = 0;
+          quoteTracker.totalCostTRY = 0;
+        } else {
+          quoteTracker.totalCostUSD = Math.max(0, quoteTracker.totalCostUSD - quoteCostBasisUSD);
+          quoteTracker.totalCostTRY = Math.max(0, quoteTracker.totalCostTRY - quoteCostBasisTRY);
+        }
+      } else if (trade.side === 'SELL') {
+        // User sold base asset and received quote asset
+        quoteTracker.virtualHolding += trade.quote_qty;
+        quoteTracker.totalCostUSD += tradeValueUSD;
+        quoteTracker.totalCostTRY += tradeValueTRY;
+        quoteTracker.totalBoughtQty += trade.quote_qty;
+        quoteTracker.totalBuyVolumeUSD += tradeValueUSD;
+        quoteTracker.totalBuyVolumeTRY += tradeValueTRY;
+      }
+    }
   }
 
   // 7. Futures Income
@@ -662,6 +692,11 @@ export async function calculatePortfolio(dataset?: PortfolioDataset): Promise<Po
       avgBuyPriceUSD = customCost;
       avgBuyPriceTRY = customCost * currentUsdtTryRate;
       costSource = 'CUSTOM';
+    } else if (t.virtualHolding > 0 && t.totalCostUSD > 0) {
+      // Use TRUE remaining open inventory cost basis
+      avgBuyPriceUSD = t.totalCostUSD / t.virtualHolding;
+      avgBuyPriceTRY = t.totalCostTRY / t.virtualHolding;
+      costSource = 'TRADE';
     } else if (t.totalBoughtQty > 0) {
       avgBuyPriceUSD = t.totalBuyVolumeUSD / t.totalBoughtQty;
       avgBuyPriceTRY = t.totalBuyVolumeTRY / t.totalBoughtQty;
