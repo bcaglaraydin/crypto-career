@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Trash2,
   Sparkles,
+  Download,
 } from 'lucide-react';
 import {
   saveStoredTrades,
@@ -31,6 +32,8 @@ import {
   getStoredFutures,
   setCachedPortfolio,
   clearClientStorage,
+  exportClientBackup,
+  restoreClientBackup,
 } from '@/lib/client-storage';
 
 interface SettingsHubModalProps {
@@ -92,7 +95,10 @@ export default function SettingsHubModal({ isOpen, onClose, onDataChanged }: Set
   // Database Action State
   const [clearingDb, setClearingDb] = useState(false);
   const [loadingDemo, setLoadingDemo] = useState(false);
+  const [exportingBackup, setExportingBackup] = useState(false);
+  const [restoringBackup, setRestoringBackup] = useState(false);
   const [dbSuccessMsg, setDbSuccessMsg] = useState<string | null>(null);
+  const backupFileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchSettings = async () => {
     try {
@@ -342,6 +348,103 @@ export default function SettingsHubModal({ isOpen, onClose, onDataChanged }: Set
     }
   };
 
+  // Handle Export Data Backup
+  const handleExportBackup = async () => {
+    try {
+      setExportingBackup(true);
+      let backupData: any = null;
+
+      // 1. Try server-side backup first (e.g. localhost SQLite)
+      try {
+        const res = await fetch('/api/backup');
+        const data = await res.json();
+        if (
+          data.success &&
+          data.backup?.dataset &&
+          (data.backup.dataset.trades?.length > 0 || data.backup.dataset.transfers?.length > 0)
+        ) {
+          backupData = data.backup;
+        }
+      } catch (e) {
+        console.warn('Server backup endpoint failed, checking client IndexedDB:', e);
+      }
+
+      // 2. If server had no data or failed, export from client IndexedDB
+      if (!backupData || (!backupData.dataset?.trades?.length && !backupData.dataset?.transfers?.length)) {
+        backupData = await exportClientBackup();
+      }
+
+      const totalTrades = backupData.dataset?.trades?.length || 0;
+      const totalTransfers = backupData.dataset?.transfers?.length || 0;
+
+      if (totalTrades === 0 && totalTransfers === 0) {
+        alert('No transactions or transfers found to export. Sync your account or import a CSV first.');
+        return;
+      }
+
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const dateStr = new Date().toISOString().slice(0, 10);
+      a.download = `cryptotrack_backup_${dateStr}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      setDbSuccessMsg(`Backup exported! (${totalTrades} trades, ${totalTransfers} cash transfers)`);
+      setTimeout(() => setDbSuccessMsg(null), 5000);
+    } catch (err: unknown) {
+      const error = err as Error;
+      alert(error.message || 'Export failed.');
+    } finally {
+      setExportingBackup(false);
+    }
+  };
+
+  // Handle Restore Data Backup
+  const handleRestoreBackup = async (file: File) => {
+    try {
+      setRestoringBackup(true);
+      setDbSuccessMsg(null);
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+
+      if (!parsed || !parsed.dataset) {
+        throw new Error('Invalid backup file. Please select a valid CryptoTrack .json backup.');
+      }
+
+      await restoreClientBackup(parsed);
+
+      // Trigger recalculation
+      const calcRes = await fetch('/api/calculate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataset: parsed.dataset }),
+      });
+      const calcData = await calcRes.json();
+      if (calcData.success && calcData.portfolio) {
+        await setCachedPortfolio(calcData.portfolio);
+      }
+
+      const tradesCount = parsed.dataset.trades?.length || 0;
+      const transfersCount = parsed.dataset.transfers?.length || 0;
+      setDbSuccessMsg(`Restore successful! Loaded ${tradesCount} trades and ${transfersCount} cash transfers.`);
+      fetchSettings();
+      if (onDataChanged) onDataChanged();
+      setTimeout(() => setDbSuccessMsg(null), 5000);
+    } catch (err: unknown) {
+      const error = err as Error;
+      alert(error.message || 'Failed to restore backup.');
+    } finally {
+      setRestoringBackup(false);
+      if (backupFileInputRef.current) {
+        backupFileInputRef.current.value = '';
+      }
+    }
+  };
+
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
     setCopiedIp(id);
@@ -439,7 +542,7 @@ export default function SettingsHubModal({ isOpen, onClose, onDataChanged }: Set
             }`}
           >
             <Database className="w-4 h-4" />
-            <span>Database & Demo</span>
+            <span>Backup & Database</span>
           </button>
         </div>
 
@@ -973,6 +1076,66 @@ export default function SettingsHubModal({ isOpen, onClose, onDataChanged }: Set
                   <span>{dbSuccessMsg}</span>
                 </div>
               )}
+
+              {/* 1-Click Backup & Data Transfer Cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* 1. Export Backup Card */}
+                <div className="p-4 rounded-xl bg-[#0e131d] border border-[#1e2738] flex flex-col justify-between space-y-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        <Download className="w-4 h-4" />
+                      </div>
+                      <h5 className="text-xs font-bold text-slate-100">Export Backup (JSON)</h5>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Download your entire transaction history, balances, and calculated portfolio to migrate to mobile or web deployment without re-syncing.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleExportBackup}
+                    disabled={exportingBackup}
+                    className="w-full py-2 px-3 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  >
+                    {exportingBackup ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                    Export Backup (JSON)
+                  </button>
+                </div>
+
+                {/* 2. Restore Backup Card */}
+                <div className="p-4 rounded-xl bg-[#0e131d] border border-[#1e2738] flex flex-col justify-between space-y-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <div className="p-1.5 rounded-lg bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                        <UploadCloud className="w-4 h-4" />
+                      </div>
+                      <h5 className="text-xs font-bold text-slate-100">Restore Backup (JSON)</h5>
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Upload your previously exported backup file to instantly load your lifetime history, 87 coins, and calculations in 1 second.
+                    </p>
+                  </div>
+                  <input
+                    type="file"
+                    accept=".json"
+                    ref={backupFileInputRef}
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files?.[0]) {
+                        handleRestoreBackup(e.target.files[0]);
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => backupFileInputRef.current?.click()}
+                    disabled={restoringBackup}
+                    className="w-full py-2 px-3 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                  >
+                    {restoringBackup ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <UploadCloud className="w-3.5 h-3.5" />}
+                    Restore Backup (JSON)
+                  </button>
+                </div>
+              </div>
 
               {/* Load Demo Data */}
               <div className="flex items-center justify-between p-4 rounded-xl bg-[#0e131d] border border-[#1e2738]">

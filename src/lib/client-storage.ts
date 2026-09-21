@@ -236,3 +236,55 @@ export async function clearClientStorage(): Promise<void> {
     tx.onerror = () => reject(tx.error);
   });
 }
+
+// -------------------------------------------------------------
+// Client-Side Backup & Restore
+// -------------------------------------------------------------
+export async function exportClientBackup(): Promise<any> {
+  const [trades, transfers, balances, futures] = await Promise.all([
+    getStoredTrades(),
+    getStoredTransfers(),
+    getStoredBalances(),
+    getStoredFutures(),
+  ]);
+
+  const cachedPortfolio = await getCachedPortfolio();
+
+  return {
+    app: 'CryptoTrack',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    dataset: {
+      trades,
+      transfers,
+      balances,
+      futures,
+    },
+    cachedPortfolio,
+    stats: {
+      tradesCount: trades.length,
+      transfersCount: transfers.length,
+      balancesCount: balances.length,
+      futuresCount: futures.length,
+    },
+  };
+}
+
+export async function restoreClientBackup(backupPayload: any): Promise<void> {
+  if (!backupPayload || !backupPayload.dataset) {
+    throw new Error('Invalid backup file format: missing dataset.');
+  }
+
+  const { trades = [], transfers = [], balances = [], futures = [] } = backupPayload.dataset;
+
+  await Promise.all([
+    saveStoredTrades(trades),
+    saveStoredTransfers(transfers),
+    saveStoredBalances(balances),
+    saveStoredFutures(futures),
+  ]);
+
+  if (backupPayload.cachedPortfolio) {
+    await setCachedPortfolio(backupPayload.cachedPortfolio);
+  }
+}
