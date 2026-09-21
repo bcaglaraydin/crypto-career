@@ -247,12 +247,23 @@ export function getHistoricalCryptoRate(pair: string, dayStr: string, cryptoRate
   if (cryptoRatesMap) {
     const key = `${pair}_${dayStr}`;
     if (cryptoRatesMap[key] !== undefined) return cryptoRatesMap[key];
+    // Nearest-earlier fallback in map
+    const prefix = `${pair}_`;
+    const candidates = Object.entries(cryptoRatesMap)
+      .filter(([k]) => k.startsWith(prefix) && k.slice(prefix.length) <= dayStr)
+      .sort((a, b) => b[0].localeCompare(a[0]));
+    if (candidates.length > 0) return candidates[0][1];
   }
   try {
     const db = getDb();
-    const stmt = db.prepare('SELECT rate FROM historical_crypto_rates WHERE pair = ? AND day = ?');
-    const row = stmt.get(pair, dayStr) as { rate: number } | undefined;
-    return row ? row.rate : null;
+    // Exact match first
+    const exact = db.prepare('SELECT rate FROM historical_crypto_rates WHERE pair = ? AND day = ?').get(pair, dayStr) as { rate: number } | undefined;
+    if (exact) return exact.rate;
+    // Nearest-earlier fallback — prevents transfers from silently being valued at $0
+    const nearest = db.prepare(
+      'SELECT rate FROM historical_crypto_rates WHERE pair = ? AND day <= ? ORDER BY day DESC LIMIT 1'
+    ).get(pair, dayStr) as { rate: number } | undefined;
+    return nearest ? nearest.rate : null;
   } catch {
     return null;
   }
