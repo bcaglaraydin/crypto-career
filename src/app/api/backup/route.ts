@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
+import { calculatePortfolio } from '@/lib/pnl-calculator';
 
 export async function GET() {
   try {
@@ -13,6 +14,9 @@ export async function GET() {
     let balances: any[] = [];
     let futures: any[] = [];
     let settings: any[] = [];
+    let wallets: any[] = [];
+    let customCosts: any[] = [];
+    let cachedPortfolio: any = null;
 
     if (db) {
       try {
@@ -21,8 +25,16 @@ export async function GET() {
         balances = db.prepare('SELECT * FROM spot_balances').all();
         futures = db.prepare('SELECT * FROM futures_positions').all();
         settings = db.prepare('SELECT * FROM settings').all();
+        wallets = db.prepare('SELECT * FROM wallet_balances').all();
+        customCosts = db.prepare('SELECT * FROM custom_costs').all();
       } catch (err) {
         console.warn('Backup db read warning:', err);
+      }
+
+      try {
+        cachedPortfolio = await calculatePortfolio();
+      } catch (calcErr) {
+        console.warn('Backup portfolio calculation warning:', calcErr);
       }
     }
 
@@ -33,14 +45,20 @@ export async function GET() {
       dataset: {
         trades,
         transfers,
+        spotBalances: balances,
         balances,
+        futuresPositions: futures,
         futures,
+        walletBalances: wallets,
+        wallets,
+        customCosts,
       },
+      cachedPortfolio,
       settings,
       stats: {
         tradesCount: trades.length,
         transfersCount: transfers.length,
-        balancesCount: balances.length,
+        spotBalancesCount: balances.length,
         futuresCount: futures.length,
       },
     };

@@ -417,11 +417,25 @@ export default function SettingsHubModal({ isOpen, onClose, onDataChanged }: Set
 
       await restoreClientBackup(parsed);
 
-      // Trigger recalculation
+      if (parsed.cachedPortfolio) {
+        await setCachedPortfolio(parsed.cachedPortfolio);
+      }
+
+      // Trigger recalculation with normalized dataset
+      const spotBalances = parsed.dataset.spotBalances || parsed.dataset.balances || [];
+      const futuresPositions = parsed.dataset.futuresPositions || parsed.dataset.futures || [];
       const calcRes = await fetch('/api/calculate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataset: parsed.dataset }),
+        body: JSON.stringify({
+          dataset: {
+            ...parsed.dataset,
+            spotBalances,
+            balances: spotBalances,
+            futuresPositions,
+            futures: futuresPositions,
+          },
+        }),
       });
       const calcData = await calcRes.json();
       if (calcData.success && calcData.portfolio) {
@@ -430,7 +444,8 @@ export default function SettingsHubModal({ isOpen, onClose, onDataChanged }: Set
 
       const tradesCount = parsed.dataset.trades?.length || 0;
       const transfersCount = parsed.dataset.transfers?.length || 0;
-      setDbSuccessMsg(`Restore successful! Loaded ${tradesCount} trades and ${transfersCount} cash transfers.`);
+      const spotCount = spotBalances.length;
+      setDbSuccessMsg(`Restore successful! Loaded ${tradesCount} trades, ${transfersCount} cash transfers, and ${spotCount} wallet balances.`);
       fetchSettings();
       if (onDataChanged) onDataChanged();
       setTimeout(() => setDbSuccessMsg(null), 5000);

@@ -257,7 +257,9 @@ export async function exportClientBackup(): Promise<any> {
     dataset: {
       trades,
       transfers,
+      spotBalances: balances,
       balances,
+      futuresPositions: futures,
       futures,
     },
     cachedPortfolio,
@@ -275,7 +277,11 @@ export async function restoreClientBackup(backupPayload: any): Promise<void> {
     throw new Error('Invalid backup file format: missing dataset.');
   }
 
-  const { trades = [], transfers = [], balances = [], futures = [] } = backupPayload.dataset;
+  const dataset = backupPayload.dataset;
+  const trades = dataset.trades || [];
+  const transfers = dataset.transfers || [];
+  const balances = dataset.spotBalances || dataset.balances || [];
+  const futures = dataset.futuresPositions || dataset.futures || [];
 
   await Promise.all([
     saveStoredTrades(trades),

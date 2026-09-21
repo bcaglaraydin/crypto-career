@@ -298,10 +298,15 @@ export async function calculatePortfolio(dataset?: PortfolioDataset): Promise<Po
 
   // 3. Fetch live Spot Balances
   const liveSpotBalances: Record<string, number> = {};
-  if (dataset?.spotBalances) {
-    for (const b of dataset.spotBalances) {
-      const total = b.free + b.locked;
-      if (total > 0) liveSpotBalances[b.asset.toUpperCase()] = total;
+  const rawSpotBalances = dataset?.spotBalances || (dataset as any)?.balances;
+  if (rawSpotBalances) {
+    for (const b of rawSpotBalances) {
+      const free = Number(b.free) || 0;
+      const locked = Number(b.locked) || 0;
+      const total = free + locked;
+      if (total > 0 && b.asset) {
+        liveSpotBalances[b.asset.toUpperCase()] = total;
+      }
     }
   } else if (db) {
     const spotBalancesStmt = db.prepare('SELECT asset, free, locked FROM spot_balances');
@@ -316,10 +321,11 @@ export async function calculatePortfolio(dataset?: PortfolioDataset): Promise<Po
 
   // 4. Fetch live Wallet Balances
   let futuresValueUSD = 0;
-  if (dataset?.walletBalances) {
-    for (const w of dataset.walletBalances) {
-      if (w.wallet_name.toLowerCase().includes('futures')) {
-        futuresValueUSD += w.balance_usdt;
+  const rawWallets = dataset?.walletBalances || (dataset as any)?.wallets;
+  if (rawWallets) {
+    for (const w of rawWallets) {
+      if (w.wallet_name && w.wallet_name.toLowerCase().includes('futures')) {
+        futuresValueUSD += Number(w.balance_usdt) || 0;
       }
     }
   } else if (db) {
@@ -347,8 +353,9 @@ export async function calculatePortfolio(dataset?: PortfolioDataset): Promise<Po
     update_time: number;
   }> = [];
 
-  if (dataset?.futuresPositions) {
-    positionRows = dataset.futuresPositions;
+  const rawFutures = dataset?.futuresPositions || (dataset as any)?.futures;
+  if (rawFutures) {
+    positionRows = rawFutures;
   } else if (db) {
     const positionsStmt = db.prepare('SELECT * FROM futures_positions');
     positionRows = positionsStmt.all() as typeof positionRows;

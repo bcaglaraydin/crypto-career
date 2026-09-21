@@ -119,7 +119,16 @@ export default function Home() {
         const calcRes = await fetch('/api/calculate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dataset: { trades, transfers, balances, futures } }),
+          body: JSON.stringify({
+            dataset: {
+              trades,
+              transfers,
+              spotBalances: balances,
+              balances,
+              futuresPositions: futures,
+              futures,
+            },
+          }),
         });
         const calcData = await calcRes.json();
         if (calcData.success && calcData.portfolio) {
