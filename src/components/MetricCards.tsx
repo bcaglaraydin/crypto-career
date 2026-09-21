@@ -44,15 +44,6 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
   const portfolioValue = isUSD ? portfolio.totalPortfolioValueUSD : portfolio.totalPortfolioValueTRY;
   const netDeposits = isUSD ? portfolio.totalNetDepositsUSD : portfolio.totalNetDepositsTRY;
 
-  // Secondary currency values
-  const totalPnL_Sec = !isUSD ? portfolio.totalPnL_USD : portfolio.totalPnL_TRY;
-  const secPrefix = !isUSD ? '$' : '₺';
-
-  // Overall ROI based on net deposits or buy volume
-  const overallROI = portfolio.totalDepositedUSD > 0
-    ? (portfolio.totalPnL_USD / portfolio.totalDepositedUSD) * 100
-    : 0;
-
   // Real cash return: "How much did I actually put in vs. what do I have now?"
   // This is the most honest measure of profit/loss — pure cash in vs. current market value.
   const netCashReturn = portfolioValue - netDeposits;
@@ -60,23 +51,27 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 sm:gap-4 2xl:gap-5">
-      {/* 1. Total PnL */}
+      {/* 1. Net Cash Return — the honest "am I winning or losing?" answer */}
       <div
-        onClick={() => toggleExpand('totalPnL')}
-        className="bg-[#121722]/90 border border-[#1e2738] hover:border-slate-700/80 rounded-xl p-3 sm:p-4 2xl:p-5 flex flex-col justify-between shadow-lg backdrop-blur-sm transition-all cursor-pointer select-none"
+        onClick={() => toggleExpand('netCashReturn')}
+        className={`bg-[#121722]/90 border rounded-xl p-3 sm:p-4 2xl:p-5 flex flex-col justify-between shadow-lg backdrop-blur-sm transition-all cursor-pointer select-none ${
+          netCashReturn >= 0
+            ? 'border-emerald-500/30 hover:border-emerald-500/50'
+            : 'border-rose-500/30 hover:border-rose-500/50'
+        }`}
       >
         <div className="flex items-center justify-between">
           <span className="text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Total Lifetime PnL
+            Net Cash Return
           </span>
           <div
             className={`p-1 sm:p-1.5 rounded-lg ${
-              totalPnL >= 0
+              netCashReturn >= 0
                 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                 : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
             }`}
           >
-            {totalPnL >= 0 ? (
+            {netCashReturn >= 0 ? (
               <TrendingUp className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             ) : (
               <TrendingDown className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
@@ -87,45 +82,45 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
         <div className="my-1.5 sm:my-2">
           <div
             className={`text-lg sm:text-2xl 2xl:text-3xl font-bold font-mono tracking-tight tabular-nums ${
-              totalPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'
+              netCashReturn >= 0 ? 'text-emerald-400' : 'text-rose-400'
             }`}
           >
-            {formatMoney(totalPnL, true)}
+            {formatMoney(netCashReturn, true)}
           </div>
-          <div className="text-[10px] sm:text-xs text-slate-400 font-mono mt-0.5 truncate">
-            {secPrefix}
-            {Math.abs(totalPnL_Sec).toLocaleString('en-US', {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}{' '}
-            {isUSD ? 'TRY' : 'USD'}
+          <div className="text-[10px] sm:text-xs text-slate-500 font-mono mt-0.5 truncate">
+            {formatMoney(netDeposits)} in → {formatMoney(portfolioValue)} now
           </div>
         </div>
 
+        {/* Footer badge: Cash ROI % — the one number that answers everything */}
         <div className="flex items-center justify-between pt-1 border-t border-[#1e2738]/50 text-[10px] sm:text-xs">
           <span
-            className={`px-1.5 py-0.2 rounded font-mono font-semibold ${
-              overallROI >= 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
+            className={`px-1.5 py-0.5 rounded font-mono font-semibold ${
+              cashROI >= 0 ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'
             }`}
           >
-            {overallROI >= 0 ? `+${overallROI.toFixed(1)}%` : `${overallROI.toFixed(1)}%`}
+            {cashROI >= 0 ? `+${cashROI.toFixed(1)}%` : `${cashROI.toFixed(1)}%`}
           </span>
-          <span className="text-slate-500">all-time ROI</span>
+          <span className="text-slate-500">{expandedCard === 'netCashReturn' ? '▲' : '▼'} on cash</span>
         </div>
 
-        {expandedCard === 'totalPnL' && (
+        {expandedCard === 'netCashReturn' && (
           <div className="mt-2 pt-2 border-t border-dashed border-[#1e2738] text-[10px] sm:text-[11px] font-mono text-slate-400 space-y-1">
             <div className="flex justify-between">
-              <span>Realized:</span>
-              <strong className={realizedPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                {formatMoney(realizedPnL, true)}
-              </strong>
+              <span>Net Cash In:</span>
+              <strong className="text-amber-400">{formatMoney(netDeposits)}</strong>
             </div>
             <div className="flex justify-between">
-              <span>Unrealized:</span>
-              <strong className={unrealizedPnL >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                {formatMoney(unrealizedPnL, true)}
-              </strong>
+              <span>Portfolio Now:</span>
+              <strong className="text-slate-200">{formatMoney(portfolioValue)}</strong>
+            </div>
+            <div className={`flex justify-between border-t border-[#1e2738]/60 pt-1 mt-1 font-semibold ${netCashReturn >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              <span>Net Return:</span>
+              <strong>{formatMoney(netCashReturn, true)} ({cashROI >= 0 ? '+' : ''}{cashROI.toFixed(1)}%)</strong>
+            </div>
+            <div className="flex justify-between border-t border-[#1e2738]/40 pt-1 mt-1 text-slate-500">
+              <span>Trading PnL:</span>
+              <span className={totalPnL >= 0 ? 'text-emerald-400/70' : 'text-rose-400/70'}>{formatMoney(totalPnL, true)}</span>
             </div>
           </div>
         )}
@@ -250,12 +245,12 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
             {formatMoney(realizedPnL, true)}
           </div>
           <div className="text-[10px] sm:text-xs text-slate-500 mt-0.5 truncate">
-            Closed trades
+            Trade performance score
           </div>
         </div>
 
         <div className="flex items-center justify-between pt-1 border-t border-[#1e2738]/50 text-[10px] sm:text-xs text-slate-400">
-          <span>Settled net profit</span>
+          <span className="text-slate-500 text-[9px] sm:text-[10px]">Includes recycled capital</span>
           <span className="text-slate-500">{expandedCard === 'realizedPnL' ? '▲' : '▼'}</span>
         </div>
 
@@ -266,6 +261,9 @@ export const MetricCards: React.FC<MetricCardsProps> = ({ portfolio, currency })
               <strong className="text-slate-200">
                 {formatMoney(portfolio.coinSummaries.reduce((sum, c) => sum + (isUSD ? c.totalSoldProceedsUSD : c.totalSoldProceedsTRY), 0))}
               </strong>
+            </div>
+            <div className="text-[9px] sm:text-[10px] text-slate-500 pt-1 border-t border-[#1e2738]/40 leading-relaxed">
+              ⓘ This counts profit on every trade cycle. When gains are reinvested, they inflate this number. For your real cash gain/loss, see &quot;Net Cash Return&quot;.
             </div>
           </div>
         )}
