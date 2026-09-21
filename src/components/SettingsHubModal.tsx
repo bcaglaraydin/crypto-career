@@ -417,7 +417,10 @@ export default function SettingsHubModal({ isOpen, onClose, onDataChanged }: Set
 
       await restoreClientBackup(parsed);
 
-      if (parsed.cachedPortfolio && parsed.cachedPortfolio.totalPortfolioValueUSD > 10) {
+      // Use the backed-up cachedPortfolio as the primary source of truth.
+      // It was computed on the user's local machine where all prices were available.
+      const backupPortfolioValue = parsed.cachedPortfolio?.totalPortfolioValueUSD ?? 0;
+      if (parsed.cachedPortfolio && backupPortfolioValue > 10) {
         await setCachedPortfolio(parsed.cachedPortfolio);
       }
 
@@ -434,7 +437,10 @@ export default function SettingsHubModal({ isOpen, onClose, onDataChanged }: Set
         tickerPrices['USDTTRY'] = parsed.cachedPortfolio.currentUsdtTryRate;
       }
 
-      // Trigger recalculation with normalized dataset and tickerPrices
+      // Attempt a fresh recalculation using the prices embedded in the backup.
+      // Only replace the cachedPortfolio if the result is within ±20% of the backup value —
+      // this guards against silent Binance price-fetch failures on Vercel where
+      // non-stablecoin spot prices come back as 0, producing a drastically lower total.
       try {
         const spotBalances = parsed.dataset.spotBalances || parsed.dataset.balances || [];
         const futuresPositions = parsed.dataset.futuresPositions || parsed.dataset.futures || [];
@@ -457,7 +463,20 @@ export default function SettingsHubModal({ isOpen, onClose, onDataChanged }: Set
         });
         const calcData = await calcRes.json();
         if (calcData.success && calcData.portfolio && calcData.portfolio.totalPortfolioValueUSD > 10) {
-          await setCachedPortfolio(calcData.portfolio);
+          const recalcValue = calcData.portfolio.totalPortfolioValueUSD;
+          // Only trust the recalc result if it's plausibly close to the backup value.
+          // A >20% deviation almost certainly means price resolution failed on the server.
+          const deviation = backupPortfolioValue > 0
+            ? Math.abs(recalcValue - backupPortfolioValue) / backupPortfolioValue
+            : 1;
+          if (deviation <= 0.2) {
+            await setCachedPortfolio(calcData.portfolio);
+          } else {
+            console.warn(
+              `Recalculated portfolio ($${recalcValue.toFixed(2)}) deviates >20% from backup ($${backupPortfolioValue.toFixed(2)}). ` +
+              'Keeping backup cachedPortfolio to avoid showing stale/wrong data.'
+            );
+          }
         }
       } catch (calcErr) {
         console.warn('Stateless recalculation error, retaining cachedPortfolio:', calcErr);
